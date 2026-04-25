@@ -2,8 +2,8 @@ const ODDS_API_BASE = "https://api.the-odds-api.com/v4";
 const MIN_EV = 0.01;
 const MAX_BETS = 25;
 
-// All sports — API auto-returns empty for out of season
-const SPORTS = [
+// All sports — auto-skips out of season
+var SPORTS = [
   { key: "americanfootball_nfl", label: "NFL", icon: "🏈", props: true },
   { key: "americanfootball_ncaaf", label: "NCAAF", icon: "🏈", props: true },
   { key: "basketball_nba", label: "NBA", icon: "🏀", props: true },
@@ -20,65 +20,94 @@ const SPORTS = [
   { key: "mma_mixed_martial_arts", label: "MMA/UFC", icon: "🥊", props: false },
 ];
 
-const SHARP_BOOKS = ["pinnacle"];
-const SOFT_BOOKS = ["draftkings","fanduel","betmgm","williamhill_us","bovada","bet365","betrivers","pointsbetus","superbook"];
-const BOOK_NAMES = {draftkings:"DraftKings",fanduel:"FanDuel",betmgm:"BetMGM",williamhill_us:"Caesars",bovada:"Bovada",bet365:"Bet365",betrivers:"BetRivers",pointsbetus:"PointsBet",superbook:"SuperBook",pinnacle:"Pinnacle"};
-const ALL_BOOKS = [...SHARP_BOOKS, ...SOFT_BOOKS].join(",");
+var SHARP_BOOKS = ["pinnacle"];
+var SOFT_BOOKS = ["draftkings","fanduel","betmgm","williamhill_us","bovada","bet365","betrivers","pointsbetus","superbook"];
+var BOOK_NAMES = {draftkings:"DraftKings",fanduel:"FanDuel",betmgm:"BetMGM",williamhill_us:"Caesars",bovada:"Bovada",bet365:"Bet365",betrivers:"BetRivers",pointsbetus:"PointsBet",superbook:"SuperBook",pinnacle:"Pinnacle"};
+var ALL_BOOKS = SHARP_BOOKS.concat(SOFT_BOOKS).join(",");
 
-const GAME_MARKETS = "h2h,spreads,totals";
-const PROP_MARKETS = "player_pass_tds,player_pass_yds,player_rush_yds,player_receptions,player_reception_yds,player_points,player_rebounds,player_assists,player_threes,player_hits,player_total_bases,player_home_runs,player_pitcher_strikeouts,player_goals,player_shots_on_goal";
-const PROP_LABELS = {player_pass_tds:"Pass TDs",player_pass_yds:"Pass Yds",player_rush_yds:"Rush Yds",player_receptions:"Receptions",player_reception_yds:"Rec Yds",player_points:"Points",player_rebounds:"Rebounds",player_assists:"Assists",player_threes:"3PT",player_hits:"Hits",player_total_bases:"Total Bases",player_home_runs:"HRs",player_pitcher_strikeouts:"K's",player_goals:"Goals",player_shots_on_goal:"SOG"};
+// KEY FIX: regions=us,eu — need EU to get Pinnacle (the sharp line)
+var REGIONS = "us,eu";
 
-const toDecimal = (o) => (o > 0 ? o / 100 + 1 : 100 / Math.abs(o) + 1);
-const toImplied = (o) => (o > 0 ? 100 / (o + 100) : Math.abs(o) / (Math.abs(o) + 100));
-const fmtOdds = (o) => (o > 0 ? "+" + o : "" + o);
-const fmtPct = (p) => (p * 100).toFixed(1) + "%";
-const fmtEV = (e) => (e > 0 ? "+" : "") + (e * 100).toFixed(2) + "%";
+var GAME_MARKETS = "h2h,spreads,totals";
+var PROP_MARKETS = "player_pass_tds,player_pass_yds,player_rush_yds,player_receptions,player_reception_yds,player_points,player_rebounds,player_assists,player_threes,player_hits,player_total_bases,player_home_runs,player_pitcher_strikeouts,player_goals,player_shots_on_goal";
+var PROP_LABELS = {player_pass_tds:"Pass TDs",player_pass_yds:"Pass Yds",player_rush_yds:"Rush Yds",player_receptions:"Receptions",player_reception_yds:"Rec Yds",player_points:"Points",player_rebounds:"Rebounds",player_assists:"Assists",player_threes:"3PT",player_hits:"Hits",player_total_bases:"Total Bases",player_home_runs:"HRs",player_pitcher_strikeouts:"K's",player_goals:"Goals",player_shots_on_goal:"SOG"};
 
-const devig = (outcomes) => {
-  const total = outcomes.reduce((s, o) => s + toImplied(o.price), 0);
-  return outcomes.map((o) => ({ ...o, trueProb: toImplied(o.price) / total }));
-};
+function toDecimal(o) { return o > 0 ? o / 100 + 1 : 100 / Math.abs(o) + 1; }
+function toImplied(o) { return o > 0 ? 100 / (o + 100) : Math.abs(o) / (Math.abs(o) + 100); }
+function fmtOdds(o) { return o > 0 ? "+" + o : "" + o; }
+function fmtPct(p) { return (p * 100).toFixed(1) + "%"; }
+function fmtEV(e) { return (e > 0 ? "+" : "") + (e * 100).toFixed(2) + "%"; }
+
+function devig(outcomes) {
+  var total = 0;
+  for (var i = 0; i < outcomes.length; i++) total += toImplied(outcomes[i].price);
+  return outcomes.map(function(o) { return { name: o.name, price: o.price, point: o.point, description: o.description, trueProb: toImplied(o.price) / total }; });
+}
 
 async function apiFetch(url) {
-  const res = await fetch(url);
+  var res = await fetch(url);
   if (!res.ok) throw new Error("API " + res.status);
   return res.json();
 }
 
 function extractEV(events, sportLabel, sportIcon, propsOnly) {
-  const bets = [];
-  for (const event of events) {
-    const game = event.away_team + " @ " + event.home_team;
-    const time = new Date(event.commence_time).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" });
-    const bmMap = {};
-    (event.bookmakers || []).forEach((bm) => { bmMap[bm.key] = bm; });
-    const sharpKey = SHARP_BOOKS.find((k) => bmMap[k]);
+  var bets = [];
+  for (var e = 0; e < events.length; e++) {
+    var event = events[e];
+    var game = event.away_team + " @ " + event.home_team;
+    var time = new Date(event.commence_time).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" });
+    var bmMap = {};
+    if (event.bookmakers) {
+      for (var b = 0; b < event.bookmakers.length; b++) {
+        bmMap[event.bookmakers[b].key] = event.bookmakers[b];
+      }
+    }
+
+    // Find Pinnacle (sharp book)
+    var sharpKey = null;
+    for (var s = 0; s < SHARP_BOOKS.length; s++) {
+      if (bmMap[SHARP_BOOKS[s]]) { sharpKey = SHARP_BOOKS[s]; break; }
+    }
     if (!sharpKey) continue;
-    for (const sm of bmMap[sharpKey].markets || []) {
-      const mk = sm.key;
-      const isProp = mk.startsWith("player_");
+
+    var sharpMarkets = bmMap[sharpKey].markets || [];
+    for (var m = 0; m < sharpMarkets.length; m++) {
+      var sm = sharpMarkets[m];
+      var mk = sm.key;
+      var isProp = mk.indexOf("player_") === 0;
       if (propsOnly && !isProp) continue;
       if (!propsOnly && isProp) continue;
-      const dvSharp = devig(sm.outcomes);
-      const tpMap = {};
-      dvSharp.forEach((o) => {
-        const k = o.name + "|" + (o.point !== undefined && o.point !== null ? o.point : "") + "|" + (o.description || "");
-        tpMap[k] = { tp: o.trueProb, sp: o.price };
-      });
-      for (const sk of SOFT_BOOKS) {
+
+      var dvSharp = devig(sm.outcomes);
+      var tpMap = {};
+      for (var d = 0; d < dvSharp.length; d++) {
+        var o = dvSharp[d];
+        var key = o.name + "|" + (o.point != null ? o.point : "") + "|" + (o.description || "");
+        tpMap[key] = { tp: o.trueProb, sp: o.price };
+      }
+
+      for (var sb = 0; sb < SOFT_BOOKS.length; sb++) {
+        var sk = SOFT_BOOKS[sb];
         if (!bmMap[sk]) continue;
-        const sMarket = bmMap[sk].markets ? bmMap[sk].markets.find((m) => m.key === mk) : null;
+        var softMarkets = bmMap[sk].markets || [];
+        var sMarket = null;
+        for (var sm2 = 0; sm2 < softMarkets.length; sm2++) {
+          if (softMarkets[sm2].key === mk) { sMarket = softMarkets[sm2]; break; }
+        }
         if (!sMarket) continue;
-        for (const out of sMarket.outcomes) {
-          const lk = out.name + "|" + (out.point !== undefined && out.point !== null ? out.point : "") + "|" + (out.description || "");
-          const sharp = tpMap[lk];
+
+        for (var oi = 0; oi < sMarket.outcomes.length; oi++) {
+          var out = sMarket.outcomes[oi];
+          var lk = out.name + "|" + (out.point != null ? out.point : "") + "|" + (out.description || "");
+          var sharp = tpMap[lk];
           if (!sharp) continue;
-          const ev = sharp.tp * toDecimal(out.price) - 1;
+
+          var ev = sharp.tp * toDecimal(out.price) - 1;
           if (ev <= MIN_EV) continue;
+
           var betType = mk === "spreads" ? "Spread" : mk === "totals" ? "Total" : isProp ? "Prop" : "ML";
           var pick = out.name;
-          if (out.point !== undefined && out.point !== null) {
+          if (out.point != null) {
             if (mk === "spreads") pick = out.name + " " + (out.point > 0 ? "+" : "") + out.point;
             else if (mk === "totals") pick = out.name + " " + out.point;
             else if (isProp) pick = (out.description || out.name) + " " + out.name + " " + out.point;
@@ -86,6 +115,7 @@ function extractEV(events, sportLabel, sportIcon, propsOnly) {
             pick = out.description + " - " + out.name;
           }
           var mktLabel = isProp ? (PROP_LABELS[mk] || mk.replace("player_","").replace(/_/g," ")) : betType;
+
           bets.push({
             sport: sportLabel, icon: sportIcon, type: betType, marketLabel: mktLabel,
             game: game, pick: pick, time: time,
@@ -101,18 +131,176 @@ function extractEV(events, sportLabel, sportIcon, propsOnly) {
 
 function buildDiscordEmbeds(bets) {
   var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  var avgEV = bets.length ? bets.reduce(function(s, b) { return s + b.ev; }, 0) / bets.length : 0;
+  var avgEV = 0;
+  for (var i = 0; i < bets.length; i++) avgEV += bets[i].ev;
+  avgEV = bets.length ? avgEV / bets.length : 0;
   var topEV = bets[0] ? bets[0].ev : 0;
   var top = bets.slice(0, MAX_BETS);
 
   var sportCounts = {};
-  bets.forEach(function(b) {
-    var k = b.icon + " " + b.sport;
+  for (var i = 0; i < bets.length; i++) {
+    var k = bets[i].icon + " " + bets[i].sport;
     sportCounts[k] = (sportCounts[k] || 0) + 1;
-  });
+  }
   var sportSummary = Object.keys(sportCounts).map(function(k) { return k + ": " + sportCounts[k]; }).join(" | ");
 
   var summaryEmbed = {
     title: "📈 +EV Best Bets",
     description: today + "\n\n" + sportSummary,
     color: 0x00e676,
+    fields: [
+      { name: "Opportunities", value: "" + bets.length, inline: true },
+      { name: "Avg EV", value: fmtEV(avgEV), inline: true },
+      { name: "Top EV", value: fmtEV(topEV), inline: true }
+    ],
+    footer: { text: "Sharp: Pinnacle (de-vigged) | Gamble responsibly" },
+    timestamp: new Date().toISOString()
+  };
+
+  var betEmbeds = [];
+  for (var i = 0; i < top.length; i += 5) {
+    var chunk = top.slice(i, i + 5);
+    var fields = [];
+    for (var j = 0; j < chunk.length; j++) {
+      var b = chunk[j];
+      var rank = i + j + 1;
+      var evEmoji = b.ev >= 0.05 ? "🔥" : b.ev >= 0.03 ? "⚡" : "✅";
+      fields.push({
+        name: rank + ". " + b.icon + " " + b.sport + " · " + b.marketLabel,
+        value: "**" + b.pick + "**\n" + b.game + (b.time ? " · " + b.time : "") + "\n📍 **" + b.bookName + "**: `" + fmtOdds(b.bookOdds) + "` → Sharp: `" + fmtOdds(b.sharpOdds) + "`\n" + evEmoji + " EV: **" + fmtEV(b.ev) + "** · Edge: **" + fmtPct(b.edge) + "**",
+        inline: false
+      });
+    }
+    betEmbeds.push({ color: 0x1a1a25, fields: fields });
+  }
+  return [summaryEmbed].concat(betEmbeds);
+}
+
+async function sendToDiscord(webhookUrl, bets) {
+  var embeds = buildDiscordEmbeds(bets);
+  for (var i = 0; i < embeds.length; i += 10) {
+    var batch = embeds.slice(i, i + 10);
+    var payload = { username: "+EV Finder", embeds: batch };
+    if (i === 0) payload.content = "# 🎯 Today's +EV Plays";
+    var res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error("Discord: " + res.status);
+    if (i + 10 < embeds.length) await new Promise(function(r) { setTimeout(r, 1000); });
+  }
+}
+
+export async function handler(event) {
+  var ODDS_API_KEY = process.env.ODDS_API_KEY;
+  var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK;
+  if (!ODDS_API_KEY) return { statusCode: 500, body: "Missing ODDS_API_KEY — add it in Netlify Environment Variables" };
+  if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing DISCORD_WEBHOOK — add it in Netlify Environment Variables" };
+
+  console.log("🔍 +EV Scanner starting — scanning " + SPORTS.length + " sports with Pinnacle sharp line...");
+  var allBets = [];
+  var creditsUsed = 0;
+  var sportsScanned = 0;
+
+  for (var s = 0; s < SPORTS.length; s++) {
+    var sport = SPORTS[s];
+    var events;
+    try {
+      events = await apiFetch(ODDS_API_BASE + "/sports/" + sport.key + "/odds/?apiKey=" + ODDS_API_KEY + "®ions=" + REGIONS + "&markets=" + GAME_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS);
+      creditsUsed += 6; // 3 markets x 2 regions
+    } catch (e) {
+      if (e.message.indexOf("422") !== -1 || e.message.indexOf("404") !== -1) {
+        console.log("  " + sport.icon + " " + sport.label + ": not in season");
+        continue;
+      }
+      if (e.message.indexOf("401") !== -1) {
+        return { statusCode: 500, body: "Invalid or expired API key. Get a new one at the-odds-api.com" };
+      }
+      if (e.message.indexOf("429") !== -1) {
+        console.log("  API rate limit hit. Stopping scan.");
+        break;
+      }
+      console.log("  " + sport.icon + " " + sport.label + ": error " + e.message);
+      continue;
+    }
+    if (!events || !events.length) {
+      console.log("  " + sport.icon + " " + sport.label + ": no events");
+      continue;
+    }
+    sportsScanned++;
+    console.log("  " + sport.icon + " " + sport.label + ": " + events.length + " events");
+
+    // Check if Pinnacle is actually in the results
+    var hasPinnacle = false;
+    for (var ei = 0; ei < events.length; ei++) {
+      if (events[ei].bookmakers) {
+        for (var bi = 0; bi < events[ei].bookmakers.length; bi++) {
+          if (events[ei].bookmakers[bi].key === "pinnacle") { hasPinnacle = true; break; }
+        }
+      }
+      if (hasPinnacle) break;
+    }
+    console.log("    Pinnacle present: " + hasPinnacle);
+
+    allBets = allBets.concat(extractEV(events, sport.label, sport.icon, false));
+
+    // Player props — 1 event per sport to save credits
+    if (sport.props) {
+      var withSharp = [];
+      for (var ei = 0; ei < events.length; ei++) {
+        if (events[ei].bookmakers) {
+          for (var bi = 0; bi < events[ei].bookmakers.length; bi++) {
+            if (events[ei].bookmakers[bi].key === "pinnacle") {
+              withSharp.push(events[ei]);
+              break;
+            }
+          }
+        }
+        if (withSharp.length >= 1) break; // Only 1 event per sport for props
+      }
+
+      for (var p = 0; p < withSharp.length; p++) {
+        try {
+          var pd = await apiFetch(ODDS_API_BASE + "/sports/" + sport.key + "/events/" + withSharp[p].id + "/odds?apiKey=" + ODDS_API_KEY + "®ions=" + REGIONS + "&markets=" + PROP_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS);
+          creditsUsed += 2;
+          if (pd && pd.bookmakers) {
+            var propEvent = JSON.parse(JSON.stringify(withSharp[p]));
+            propEvent.bookmakers = pd.bookmakers;
+            allBets = allBets.concat(extractEV([propEvent], sport.label, sport.icon, true));
+          }
+        } catch (err) { console.log("    Props error: " + err.message); }
+      }
+    }
+  }
+
+  // Deduplicate and sort
+  var seen = {};
+  var bets = [];
+  for (var i = 0; i < allBets.length; i++) {
+    var b = allBets[i];
+    var k = b.bookName + "|" + b.pick + "|" + b.game + "|" + b.marketLabel;
+    if (!seen[k]) {
+      seen[k] = true;
+      bets.push(b);
+    }
+  }
+  bets.sort(function(a, b) { return b.ev - a.ev; });
+
+  console.log("✅ Found " + bets.length + " +EV bets across " + sportsScanned + " sports (~" + creditsUsed + " credits used)");
+
+  if (!bets.length) {
+    await fetch(DISCORD_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "+EV Finder",
+        content: "📭 **No +EV bets found right now.**\nScanned " + sportsScanned + " in-season sports. Used ~" + creditsUsed + " credits.\nLines are tight — try again closer to game time!"
+      })
+    });
+    return { statusCode: 200, body: "No +EV bets. Scanned " + sportsScanned + " sports. ~" + creditsUsed + " credits." };
+  }
+
+  await sendToDiscord(DISCORD_WEBHOOK, bets);
+  return { statusCode: 200, body: "Sent " + bets.length + " +EV bets. Scanned " + sportsScanned + " sports. ~" + creditsUsed + " credits." };
+}
