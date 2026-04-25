@@ -10,8 +10,17 @@ const SPORTS = [
   { key: "basketball_ncaab", label: "NCAAB", icon: "🏀" },
   { key: "baseball_mlb", label: "MLB", icon: "⚾" },
   { key: "icehockey_nhl", label: "NHL", icon: "🏒" },
+  { key: "soccer_epl", label: "EPL", icon: "⚽" },
+  { key: "soccer_spain_la_liga", label: "La Liga", icon: "⚽" },
+  { key: "soccer_germany_bundesliga", label: "Bundesliga", icon: "⚽" },
+  { key: "soccer_italy_serie_a", label: "Serie A", icon: "⚽" },
+  { key: "soccer_france_ligue_one", label: "Ligue 1", icon: "⚽" },
+  { key: "soccer_usa_mls", label: "MLS", icon: "⚽" },
+  { key: "soccer_uefa_champs_league", label: "UCL", icon: "⚽" },
+  { key: "tennis_atp_french_open", label: "ATP Tennis", icon: "🎾" },
+  { key: "tennis_wta_french_open", label: "WTA Tennis", icon: "🎾" },
+  { key: "mma_mixed_martial_arts", label: "MMA/UFC", icon: "🥊" },
 ];
-
 const SHARP_BOOKS = ["pinnacle"];
 const SOFT_BOOKS = [
   "draftkings","fanduel","betmgm","williamhill_us","bovada",
