@@ -7,26 +7,15 @@ var SPORTS = [
   { key: "icehockey_nhl", label: "NHL", icon: "🏒", props: true },
   { key: "basketball_wnba", label: "WNBA", icon: "🏀", props: true },
   { key: "americanfootball_ufl", label: "UFL", icon: "🏈", props: true },
-  { key: "americanfootball_nfl", label: "NFL", icon: "🏈", props: true },
-  { key: "americanfootball_ncaaf", label: "NCAAF", icon: "🏈", props: true },
-  { key: "basketball_ncaab", label: "NCAAB", icon: "🏀", props: true },
   { key: "soccer_epl", label: "EPL", icon: "⚽", props: false },
   { key: "soccer_spain_la_liga", label: "La Liga", icon: "⚽", props: false },
-  { key: "soccer_germany_bundesliga", label: "Bundesliga", icon: "⚽", props: false },
-  { key: "soccer_italy_serie_a", label: "Serie A", icon: "⚽", props: false },
-  { key: "soccer_france_ligue_one", label: "Ligue 1", icon: "⚽", props: false },
   { key: "soccer_usa_mls", label: "MLS", icon: "⚽", props: false },
-  { key: "soccer_uefa_champs_league", label: "UCL", icon: "⚽", props: false },
   { key: "soccer_mexico_ligamx", label: "Liga MX", icon: "⚽", props: false },
-  { key: "soccer_brazil_campeonato", label: "Brazil A", icon: "⚽", props: false },
-  { key: "soccer_fifa_world_cup", label: "World Cup", icon: "⚽", props: false },
   { key: "tennis_atp_madrid_open", label: "ATP Madrid", icon: "🎾", props: false },
   { key: "tennis_wta_madrid_open", label: "WTA Madrid", icon: "🎾", props: false },
   { key: "mma_mixed_martial_arts", label: "MMA/UFC", icon: "🥊", props: false },
-  { key: "boxing_boxing", label: "Boxing", icon: "🥊", props: false },
   { key: "cricket_ipl", label: "IPL", icon: "🏏", props: false },
-  { key: "baseball_kbo", label: "KBO", icon: "⚾", props: false },
-  { key: "baseball_npb", label: "NPB Japan", icon: "⚾", props: false }
+  { key: "baseball_kbo", label: "KBO", icon: "⚾", props: false }
 ];
 var SHARP_BOOKS = ["pinnacle"];
 var SOFT_BOOKS = ["draftkings","fanduel","betmgm","williamhill_us","bovada","bet365","betrivers","pointsbetus","superbook"];
@@ -154,30 +143,29 @@ export async function handler(event) {
   var DISCORD_WEBHOOK = (process.env.DISCORD_WEBHOOK || "").trim();
   if (!ODDS_API_KEY) return { statusCode: 500, body: "Missing ODDS_API_KEY" };
   if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing DISCORD_WEBHOOK" };
-  console.log("🔍 Starting scan. Key: " + ODDS_API_KEY.substring(0,4) + "... Sports: " + SPORTS.length);
   var allBets = [];
   var creditsUsed = 0;
   var sportsScanned = 0;
   var errors = [];
   for (var s = 0; s < SPORTS.length; s++) {
     var sport = SPORTS[s];
-    var url = ODDS_API_BASE + "/sports/" + sport.key + "/odds/?apiKey=" + ODDS_API_KEY + "®ions=" + REGIONS + "&markets=" + GAME_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS;
+    var url = ODDS_API_BASE + "/sports/" + sport.key + "/odds/?apiKey=" + ODDS_API_KEY + "&regions=" + REGIONS + "&markets=" + GAME_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS;
     var events;
     try {
       var res = await fetch(url);
       if (!res.ok) {
         var errText = await res.text();
-        console.log("  " + sport.label + ": HTTP " + res.status + " - " + errText.substring(0, 100));
-        if (res.status === 429) { console.log("  Out of credits, stopping."); errors.push("Out of credits at " + sport.label); break; }
+        errors.push(sport.label + ":HTTP" + res.status + ":" + errText.substring(0, 60));
+        if (res.status === 429) break;
         continue;
       }
       events = await res.json();
       creditsUsed += 6;
     } catch (e) {
-      console.log("  " + sport.label + ": fetch error " + e.message);
+      errors.push(sport.label + ":ERR:" + e.message);
       continue;
     }
-    if (!events || !events.length) { console.log("  " + sport.label + ": no events"); continue; }
+    if (!events || !events.length) continue;
     sportsScanned++;
     var hasPinnacle = false;
     for (var ei = 0; ei < events.length; ei++) {
@@ -188,7 +176,6 @@ export async function handler(event) {
       }
       if (hasPinnacle) break;
     }
-    console.log("  " + sport.label + ": " + events.length + " events, Pinnacle: " + hasPinnacle);
     allBets = allBets.concat(extractEV(events, sport.label, sport.icon, false));
     if (sport.props && hasPinnacle) {
       var firstSharp = null;
@@ -202,22 +189,17 @@ export async function handler(event) {
       }
       if (firstSharp) {
         try {
-          var propUrl = ODDS_API_BASE + "/sports/" + sport.key + "/events/" + firstSharp.id + "/odds?apiKey=" + ODDS_API_KEY + "®ions=" + REGIONS + "&markets=" + PROP_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS;
-          var propRes = await fetch(propUrl);
+          var propRes = await fetch(ODDS_API_BASE + "/sports/" + sport.key + "/events/" + firstSharp.id + "/odds?apiKey=" + ODDS_API_KEY + "&regions=" + REGIONS + "&markets=" + PROP_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS);
           if (propRes.ok) {
             var pd = await propRes.json();
             creditsUsed += 2;
             if (pd && pd.bookmakers) {
               var propEvent = JSON.parse(JSON.stringify(firstSharp));
               propEvent.bookmakers = pd.bookmakers;
-              var propBets = extractEV([propEvent], sport.label, sport.icon, true);
-              console.log("    Props: " + propBets.length + " +EV found");
-              allBets = allBets.concat(propBets);
+              allBets = allBets.concat(extractEV([propEvent], sport.label, sport.icon, true));
             }
-          } else {
-            console.log("    Props: HTTP " + propRes.status);
           }
-        } catch (err) { console.log("    Props error: " + err.message); }
+        } catch (err) {}
       }
     }
   }
@@ -229,15 +211,12 @@ export async function handler(event) {
     if (!seen[k]) { seen[k] = true; bets.push(b); }
   }
   bets.sort(function(a, b) { return b.ev - a.ev; });
-  console.log("✅ " + bets.length + " +EV bets from " + sportsScanned + " sports (~" + creditsUsed + " credits)");
-  if (errors.length) console.log("⚠️ Errors: " + errors.join(", "));
+  var summary = bets.length + " bets, " + sportsScanned + " sports, ~" + creditsUsed + " credits";
+  if (errors.length) summary += " | ERRORS: " + errors.join(" || ");
   if (!bets.length) {
-    var msg = "📭 **No +EV bets found right now.**\nScanned " + sportsScanned + " in-season sports. ~" + creditsUsed + " credits used.";
-    if (errors.length) msg += "\n⚠️ " + errors.join(", ");
-    msg += "\nTry again closer to game time!";
-    await fetch(DISCORD_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: msg }) });
-    return { statusCode: 200, body: "No +EV bets. " + sportsScanned + " sports. ~" + creditsUsed + " credits." + (errors.length ? " Errors: " + errors.join(", ") : "") };
+    await fetch(DISCORD_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "📭 **No +EV bets found.**\n" + summary }) });
+    return { statusCode: 200, body: summary };
   }
   await sendToDiscord(DISCORD_WEBHOOK, bets);
-  return { statusCode: 200, body: "Sent " + bets.length + " +EV bets from " + sportsScanned + " sports. ~" + creditsUsed + " credits." };
+  return { statusCode: 200, body: summary };
 }
