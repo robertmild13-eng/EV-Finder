@@ -206,6 +206,7 @@ export async function handler(event) {
   var ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
   if (!ODDS_API_KEY) return { statusCode: 500, body: "Missing ODDS_API_KEY" };
   if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing DISCORD_WEBHOOK" };
+  if (!ANTHROPIC_KEY) return { statusCode: 200, body: "ANTHROPIC KEY IS MISSING. Check env var name in Netlify." };
   var allBets = [];
   var allGames = [];
   var creditsUsed = 0;
