@@ -84,32 +84,18 @@ async function fetchPolymarketSports() {
   var markets = [];
   try {
     var res = await fetch(POLY_API + "/markets?limit=100&active=true&tag=sports", { headers: { "User-Agent": "EVFinder/1.0" } });
-    if (!res.ok) { console.log("Polymarket: HTTP " + res.status); return []; }
+    if (!res.ok) return [];
     var data = await res.json();
     if (!Array.isArray(data)) return [];
     for (var i = 0; i < data.length; i++) {
       var m = data[i];
       if (m.closed || !m.active) continue;
-      var outcomes = [];
-      if (m.outcomePrices) {
-        try { outcomes = JSON.parse(m.outcomePrices); } catch(e) {}
-      }
-      var outcomeNames = [];
-      if (m.outcomes) {
-        try { outcomeNames = typeof m.outcomes === "string" ? JSON.parse(m.outcomes) : m.outcomes; } catch(e) {}
-      }
-      markets.push({
-        question: m.question || "",
-        slug: m.slug || "",
-        outcomes: outcomeNames,
-        prices: outcomes,
-        volume: m.volume || 0,
-        liquidity: m.liquidity || 0,
-        endDate: m.endDate || ""
-      });
+      var outcomes = []; var outcomeNames = [];
+      try { outcomes = m.outcomePrices ? JSON.parse(m.outcomePrices) : []; } catch(e) {}
+      try { outcomeNames = m.outcomes ? (typeof m.outcomes === "string" ? JSON.parse(m.outcomes) : m.outcomes) : []; } catch(e) {}
+      markets.push({ question: m.question || "", outcomes: outcomeNames, prices: outcomes, volume: m.volume || 0 });
     }
-    console.log("Polymarket: " + markets.length + " sports markets found");
-  } catch (e) { console.log("Polymarket error: " + e.message); }
+  } catch (e) {}
   return markets;
 }
 function buildDiscordEmbeds(bets) {
@@ -146,35 +132,6 @@ async function sendToDiscord(webhookUrl, bets) {
     if (i + 10 < embeds.length) await new Promise(function(r) { setTimeout(r, 1000); });
   }
 }
-async function sendPolyToDiscord(webhookUrl, polyMarkets) {
-  if (!polyMarkets.length) return;
-  var fields = [];
-  var sorted = polyMarkets.sort(function(a, b) { return (b.volume || 0) - (a.volume || 0); }).slice(0, 10);
-  for (var i = 0; i < sorted.length; i++) {
-    var m = sorted[i];
-    var priceStr = "";
-    for (var p = 0; p < m.outcomes.length && p < m.prices.length; p++) {
-      var pct = (parseFloat(m.prices[p]) * 100).toFixed(0);
-      if (p > 0) priceStr += " | ";
-      priceStr += m.outcomes[p] + ": **" + pct + "%**";
-    }
-    var vol = m.volume ? "$" + Math.round(m.volume).toLocaleString() : "n/a";
-    fields.push({ name: "📊 " + m.question, value: priceStr + "\nVolume: " + vol, inline: false });
-  }
-  if (!fields.length) return;
-  var embeds = [];
-  for (var i = 0; i < fields.length; i += 5) {
-    embeds.push({ color: 0x2962FF, fields: fields.slice(i, i + 5) });
-  }
-  await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "# 📊 Polymarket — Prediction Market Odds" }) });
-  await new Promise(function(r) { setTimeout(r, 500); });
-  for (var i = 0; i < embeds.length; i += 10) {
-    var batch = embeds.slice(i, i + 10);
-    if (i === embeds.length - 1 || i + 10 >= embeds.length) { batch[batch.length - 1].footer = { text: "Source: Polymarket | Prices = market-implied probability" }; }
-    await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", embeds: batch }) });
-    if (i + 10 < embeds.length) await new Promise(function(r) { setTimeout(r, 500); });
-  }
-}
 async function getAIPicks(games, bets, polyMarkets, anthropicKey, webhookUrl) {
   var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   var gameList = ""; var seen = {};
@@ -186,12 +143,10 @@ async function getAIPicks(games, bets, polyMarkets, anthropicKey, webhookUrl) {
     gameList += "\n";
   }
   var evSummary = "";
-  var topEV = bets.slice(0, 10);
-  for (var i = 0; i < topEV.length; i++) { var b = topEV[i]; evSummary += b.icon + " " + b.sport + ": " + b.pick + " (" + b.game + ") | " + b.bookName + " " + fmtOdds(b.bookOdds) + " | EV: " + fmtEV(b.ev) + "\n"; }
+  for (var i = 0; i < Math.min(bets.length, 10); i++) { var b = bets[i]; evSummary += b.icon + " " + b.sport + ": " + b.pick + " (" + b.game + ") | " + b.bookName + " " + fmtOdds(b.bookOdds) + " | EV: " + fmtEV(b.ev) + "\n"; }
   var polyInfo = "";
   if (polyMarkets.length) {
-    polyInfo = "\nPolymarket prediction market odds (these represent real money crowd consensus):\n";
-    var topPoly = polyMarkets.sort(function(a, b) { return (b.volume || 0) - (a.volume || 0); }).slice(0, 15);
+    var topPoly = polyMarkets.sort(function(a, b) { return (b.volume || 0) - (a.volume || 0); }).slice(0, 20);
     for (var i = 0; i < topPoly.length; i++) {
       var m = topPoly[i]; polyInfo += "- " + m.question + ": ";
       for (var p = 0; p < m.outcomes.length && p < m.prices.length; p++) {
@@ -201,23 +156,23 @@ async function getAIPicks(games, bets, polyMarkets, anthropicKey, webhookUrl) {
       polyInfo += " (vol: $" + Math.round(m.volume || 0) + ")\n";
     }
   }
-  var prompt = "You are a sharp sports betting analyst. Today is " + today + ".\n\n";
-  prompt += "Here are today's games:\n" + gameList + "\n\n";
-  if (evSummary) { prompt += "+EV opportunities (soft book odds better than Pinnacle de-vigged line):\n" + evSummary + "\n\n"; }
-  if (polyInfo) { prompt += polyInfo + "\n"; }
-  prompt += "Give me your TOP 5 BEST BETS OF THE DAY. For each pick:\n";
-  prompt += "1. State the pick clearly (team, spread/ML/total/prop, odds)\n";
-  prompt += "2. Confidence: 🔥🔥🔥 (strong), 🔥🔥 (good), 🔥 (lean)\n";
-  prompt += "3. 2-3 sentences reasoning: recent form, matchup history, home/away splits, rest, injuries, weather, situational spots\n";
-  prompt += "4. Note if it overlaps with a +EV opportunity or aligns with Polymarket consensus\n\n";
-  prompt += "Format:\nPICK: [pick]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\n";
-  prompt += "Be bold. End with a parlay suggestion combining your top 3.";
+  var prompt = "You are an elite sports betting analyst. Today is " + today + ".\n\n";
+  prompt += "=== TODAY'S GAMES ===\n" + gameList + "\n";
+  if (evSummary) { prompt += "=== +EV OPPORTUNITIES (sportsbook edges vs Pinnacle) ===\n" + evSummary + "\n"; }
+  if (polyInfo) { prompt += "=== POLYMARKET PREDICTION MARKETS (real money crowd odds) ===\n" + polyInfo + "\n"; }
+  prompt += "Give me TWO sections:\n\n";
+  prompt += "SECTION 1: 🎯 TOP 5 SPORTSBOOK BEST BETS\n";
+  prompt += "For each pick: state the pick (team, ML/spread/total/prop, odds), confidence (🔥🔥🔥/🔥🔥/🔥), and 2-3 sentences of reasoning (recent form, matchups, splits, rest, injuries, situations). Note if it aligns with a +EV opportunity or Polymarket consensus.\n\n";
+  prompt += "SECTION 2: 📊 TOP 5 POLYMARKET PLAYS\n";
+  prompt += "Analyze the Polymarket markets above. Pick the 5 best value plays where the crowd is either RIGHT and you should follow the consensus, or WRONG and there's value on the other side. For each: state the market, your pick (Yes/No and at what price), confidence, and 2-3 sentences explaining WHY the market is mispriced or correctly priced. Consider current form, public bias, sharp money indicators, and any information the crowd might be over/under-weighting.\n\n";
+  prompt += "Format each pick:\nPICK: [pick]\nCONFIDENCE: [fire emojis]\nWHY: [reasoning]\n\n";
+  prompt += "End with a PARLAY OF THE DAY combining your 3 highest confidence picks across both sections.";
   try {
     await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "🧠 Generating AI analysis..." }) });
     var aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1500, messages: [{ role: "user", content: prompt }] })
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
     });
     if (!aiRes.ok) { var aiErr = await aiRes.text(); await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "⚠️ AI error: HTTP " + aiRes.status + " — " + aiErr.substring(0, 200) }) }); return; }
     var aiData = await aiRes.json(); var aiText = "";
@@ -229,11 +184,11 @@ async function getAIPicks(games, bets, polyMarkets, anthropicKey, webhookUrl) {
       var cut = aiText.lastIndexOf("\n", 3900); if (cut === -1) cut = 3900;
       chunks.push(aiText.substring(0, cut)); aiText = aiText.substring(cut);
     }
-    await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "# 🧠 AI Best Bets of the Day" }) });
+    await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "# 🧠 AI Best Bets + Polymarket Plays" }) });
     await new Promise(function(r) { setTimeout(r, 500); });
     for (var c = 0; c < chunks.length; c++) {
       var embed = { description: chunks[c], color: 0x7C3AED };
-      if (c === chunks.length - 1) embed.footer = { text: "Powered by Claude AI + Polymarket data | Not financial advice" };
+      if (c === chunks.length - 1) embed.footer = { text: "Powered by Claude AI + Polymarket | Not financial advice" };
       await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", embeds: [embed] }) });
       if (c < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 500); });
     }
@@ -287,9 +242,7 @@ export async function handler(event) {
   if (errors.length) summary += " | ERRORS: " + errors.join(",");
   if (bets.length) { await sendToDiscord(DISCORD_WEBHOOK, bets); }
   else { await fetch(DISCORD_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "📭 **No +EV bets found.** " + sportsScanned + " sports. ~" + creditsUsed + " credits." }) }); }
-  await new Promise(function(r) { setTimeout(r, 1000); });
-  if (polyMarkets.length) { await sendPolyToDiscord(DISCORD_WEBHOOK, polyMarkets); }
-  if (ANTHROPIC_KEY && allGames.length > 0) {
+  if (ANTHROPIC_KEY && (allGames.length > 0 || polyMarkets.length > 0)) {
     await new Promise(function(r) { setTimeout(r, 1500); });
     await getAIPicks(allGames, bets, polyMarkets, ANTHROPIC_KEY, DISCORD_WEBHOOK);
     summary += " + AI picks";
