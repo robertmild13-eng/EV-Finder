@@ -32,8 +32,7 @@ function fmtOdds(o) { return o > 0 ? "+" + o : "" + o; }
 function fmtPct(p) { return (p * 100).toFixed(1) + "%"; }
 function fmtEV(e) { return (e > 0 ? "+" : "") + (e * 100).toFixed(2) + "%"; }
 function kellyBet(trueProb, decimalOdds, bankroll) {
-  var b = decimalOdds - 1;
-  var q = 1 - trueProb;
+  var b = decimalOdds - 1; var q = 1 - trueProb;
   var fullKelly = (b * trueProb - q) / b;
   if (fullKelly <= 0) return { full: 0, quarter: 0, betSize: 0 };
   var quarterKelly = fullKelly * 0.25;
@@ -106,7 +105,14 @@ async function fetchPolymarketSports() {
   } catch (e) {}
   return markets;
 }
-function buildDiscordEmbeds(bets, bankroll) {
+async function post(webhook, content, embeds) {
+  var payload = { username: "+EV Finder" };
+  if (content) payload.content = content;
+  if (embeds) payload.embeds = embeds;
+  await fetch(webhook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  await new Promise(function(r) { setTimeout(r, 600); });
+}
+async function sendEVPlays(webhook, bets, bankroll) {
   var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   var avgEV = 0; var totalExpProfit = 0; var totalKellyRisk = 0;
   for (var i = 0; i < bets.length; i++) {
@@ -129,8 +135,8 @@ function buildDiscordEmbeds(bets, bankroll) {
     { name: "💰 Bankroll", value: "$" + bankroll.toLocaleString(), inline: true },
     { name: "📊 Total Kelly Risk", value: "$" + totalKellyRisk.toFixed(2), inline: true },
     { name: "📈 Expected Profit", value: "$" + totalExpProfit.toFixed(2), inline: true }
-  ], footer: { text: "Kelly = Quarter-Kelly sizing | Sharp: Pinnacle (de-vigged) | Gamble responsibly" }, timestamp: new Date().toISOString() };
-  var betEmbeds = [];
+  ], footer: { text: "Quarter-Kelly sizing | Sharp: Pinnacle (de-vigged)" }, timestamp: new Date().toISOString() };
+  await post(webhook, "# 🎯 Today's +EV Plays", [summaryEmbed]);
   for (var i = 0; i < top.length; i += 5) {
     var chunk = top.slice(i, i + 5); var fields = [];
     for (var j = 0; j < chunk.length; j++) {
@@ -139,66 +145,52 @@ function buildDiscordEmbeds(bets, bankroll) {
       var kellyStr = b.kelly.betSize > 0 ? "\n💰 Bet: **$" + b.kelly.betSize.toFixed(2) + "** (Kelly: " + (b.kelly.quarter * 100).toFixed(1) + "%)" : "";
       fields.push({ name: rank + ". " + b.icon + " " + b.sport + " · " + b.marketLabel, value: "**" + b.pick + "**\n" + b.game + (b.time ? " · " + b.time : "") + "\n📍 **" + b.bookName + "**: `" + fmtOdds(b.bookOdds) + "` → Sharp: `" + fmtOdds(b.sharpOdds) + "`\n" + evEmoji + " EV: **" + fmtEV(b.ev) + "** · Edge: **" + fmtPct(b.edge) + "**" + kellyStr, inline: false });
     }
-    betEmbeds.push({ color: 0x1a1a25, fields: fields });
-  }
-  return [summaryEmbed].concat(betEmbeds);
-}
-async function sendToDiscord(webhookUrl, bets, bankroll) {
-  var embeds = buildDiscordEmbeds(bets, bankroll);
-  for (var i = 0; i < embeds.length; i += 10) {
-    var batch = embeds.slice(i, i + 10);
-    var payload = { username: "+EV Finder", embeds: batch };
-    if (i === 0) payload.content = "# 🎯 Today's +EV Plays";
-    var res = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) throw new Error("Discord: " + res.status);
-    if (i + 10 < embeds.length) await new Promise(function(r) { setTimeout(r, 1000); });
+    await post(webhook, null, [{ color: 0x1a1a25, fields: fields }]);
   }
 }
-async function sendBacktest(webhookUrl, bets, bankroll) {
-  var totalBets = bets.length;
-  if (!totalBets) return;
-  var totalExpProfit = 0; var totalRisk = 0; var avgEdge = 0;
-  var flat100Profit = 0;
+async function sendBacktest(webhook, bets, bankroll) {
+  var totalExpProfit = 0; var totalRisk = 0; var avgEdge = 0; var flat100Profit = 0;
   var sportBreakdown = {};
   for (var i = 0; i < bets.length; i++) {
     var b = bets[i];
     var k = kellyBet(b.trueProb, b.decimalOdds, bankroll);
-    totalExpProfit += k.betSize * b.ev;
-    totalRisk += k.betSize;
-    avgEdge += b.edge;
+    totalExpProfit += k.betSize * b.ev; totalRisk += k.betSize; avgEdge += b.edge;
     flat100Profit += 100 * b.ev;
     var sk = b.icon + " " + b.sport;
     if (!sportBreakdown[sk]) sportBreakdown[sk] = { count: 0, expProfit: 0, avgEV: 0 };
-    sportBreakdown[sk].count++;
-    sportBreakdown[sk].expProfit += k.betSize * b.ev;
-    sportBreakdown[sk].avgEV += b.ev;
+    sportBreakdown[sk].count++; sportBreakdown[sk].expProfit += k.betSize * b.ev; sportBreakdown[sk].avgEV += b.ev;
   }
-  avgEdge = avgEdge / totalBets;
+  avgEdge = avgEdge / bets.length;
   var roi = totalRisk > 0 ? (totalExpProfit / totalRisk) * 100 : 0;
   var sportLines = Object.keys(sportBreakdown).map(function(sk) {
-    var s = sportBreakdown[sk];
-    s.avgEV = s.avgEV / s.count;
+    var s = sportBreakdown[sk]; s.avgEV = s.avgEV / s.count;
     return sk + ": " + s.count + " bets, Exp: $" + s.expProfit.toFixed(2) + ", Avg EV: " + fmtEV(s.avgEV);
   }).join("\n");
-  var embed = {
-    title: "📊 Backtest Simulation — Today's Scan",
-    color: 0xFF9800,
-    description: "What happens if you tail every +EV play from this scan?",
-    fields: [
-      { name: "Total +EV Bets Found", value: "" + totalBets, inline: true },
-      { name: "Avg Edge", value: fmtPct(avgEdge), inline: true },
-      { name: "Expected ROI", value: roi.toFixed(1) + "%", inline: true },
-      { name: "💰 Quarter-Kelly Sizing ($" + bankroll.toLocaleString() + " bankroll)", value: "Total Risk: **$" + totalRisk.toFixed(2) + "**\nExpected Profit: **$" + totalExpProfit.toFixed(2) + "**", inline: false },
-      { name: "📋 Flat $100 Sizing", value: "Total Risk: **$" + (totalBets * 100) + "**\nExpected Profit: **$" + flat100Profit.toFixed(2) + "**", inline: false },
-      { name: "📈 By Sport", value: sportLines, inline: false },
-      { name: "⚠️ What This Means", value: "Over 1000+ bets at these edges, you'd expect to profit ~" + roi.toFixed(1) + "% on money wagered. Single-day variance is high — the edge only shows over volume. Stay disciplined, trust the math.", inline: false }
-    ],
-    footer: { text: "Backtest = expected value simulation | Past edges ≠ guaranteed future results" },
-    timestamp: new Date().toISOString()
-  };
-  await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "# 📊 Backtest Simulation", embeds: [embed] }) });
+  await post(webhook, "# 📊 Backtest Simulation", [{ title: "📊 Today's Scan — If You Tailed Everything", color: 0xFF9800, fields: [
+    { name: "Total +EV Bets", value: "" + bets.length, inline: true },
+    { name: "Avg Edge", value: fmtPct(avgEdge), inline: true },
+    { name: "Expected ROI", value: roi.toFixed(1) + "%", inline: true },
+    { name: "💰 Quarter-Kelly ($" + bankroll.toLocaleString() + ")", value: "Risk: **$" + totalRisk.toFixed(2) + "**\nExp Profit: **$" + totalExpProfit.toFixed(2) + "**", inline: false },
+    { name: "📋 Flat $100", value: "Risk: **$" + (bets.length * 100) + "**\nExp Profit: **$" + flat100Profit.toFixed(2) + "**", inline: false },
+    { name: "📈 By Sport", value: sportLines, inline: false },
+    { name: "⚠️ Remember", value: "Edge shows over volume (1000+ bets). Single-day variance is high. Trust the math, stay disciplined.", inline: false }
+  ], footer: { text: "Expected value simulation | Not guaranteed results" }, timestamp: new Date().toISOString() }]);
 }
-async function getAIPicks(games, bets, polyMarkets, anthropicKey, webhookUrl) {
+async function sendAItoChannel(webhook, aiText, title, footerText) {
+  var chunks = [];
+  while (aiText.length > 0) {
+    if (aiText.length <= 3900) { chunks.push(aiText); break; }
+    var cut = aiText.lastIndexOf("\n", 3900); if (cut === -1) cut = 3900;
+    chunks.push(aiText.substring(0, cut)); aiText = aiText.substring(cut);
+  }
+  await post(webhook, title, null);
+  for (var c = 0; c < chunks.length; c++) {
+    var embed = { description: chunks[c], color: 0x7C3AED };
+    if (c === chunks.length - 1) embed.footer = { text: footerText };
+    await post(webhook, null, [embed]);
+  }
+}
+async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
   var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   var gameList = ""; var seen = {};
   for (var i = 0; i < games.length; i++) {
@@ -222,48 +214,75 @@ async function getAIPicks(games, bets, polyMarkets, anthropicKey, webhookUrl) {
       polyInfo += " (vol: $" + Math.round(m.volume || 0) + ")\n";
     }
   }
-  var prompt = "You are an elite sports betting analyst. Today is " + today + ".\n\n";
-  prompt += "=== TODAY'S GAMES ===\n" + gameList + "\n";
-  if (evSummary) { prompt += "=== +EV OPPORTUNITIES ===\n" + evSummary + "\n"; }
-  if (polyInfo) { prompt += "=== POLYMARKET PREDICTION MARKETS ===\n" + polyInfo + "\n"; }
-  prompt += "Give me TWO sections:\n\n";
-  prompt += "SECTION 1: 🎯 TOP 5 SPORTSBOOK BEST BETS\nFor each: pick, confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences reasoning. Note +EV or Polymarket alignment.\n\n";
-  prompt += "SECTION 2: 📊 TOP 5 POLYMARKET PLAYS\nPick the 5 best value plays. For each: market, your pick, confidence, 2-3 sentences on why the crowd is right or wrong.\n\n";
-  prompt += "Format:\nPICK: [pick]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\nEnd with PARLAY OF THE DAY combining top 3.";
+  var sportsPrompt = "You are an elite sports betting analyst. Today is " + today + ".\n\n";
+  sportsPrompt += "=== TODAY'S GAMES ===\n" + gameList + "\n";
+  if (evSummary) { sportsPrompt += "=== +EV OPPORTUNITIES ===\n" + evSummary + "\n"; }
+  sportsPrompt += "Give me your TOP 5 SPORTSBOOK BEST BETS OF THE DAY.\nFor each: pick (team, ML/spread/total/prop, odds), confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences reasoning (form, matchups, splits, rest, injuries, situations). Note +EV alignment.\n\n";
+  sportsPrompt += "Format:\nPICK: [pick]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\nBe bold and specific.";
   try {
-    await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "🧠 Generating AI analysis..." }) });
+    await post(webhooks.aiPicks, "🧠 Generating sportsbook analysis...", null);
     var aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1500, messages: [{ role: "user", content: sportsPrompt }] })
     });
-    if (!aiRes.ok) { var aiErr = await aiRes.text(); await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "⚠️ AI error: HTTP " + aiRes.status + " — " + aiErr.substring(0, 200) }) }); return; }
-    var aiData = await aiRes.json(); var aiText = "";
-    for (var i = 0; i < aiData.content.length; i++) { if (aiData.content[i].type === "text") aiText += aiData.content[i].text; }
-    if (!aiText) return;
-    var chunks = [];
-    while (aiText.length > 0) {
-      if (aiText.length <= 3900) { chunks.push(aiText); break; }
-      var cut = aiText.lastIndexOf("\n", 3900); if (cut === -1) cut = 3900;
-      chunks.push(aiText.substring(0, cut)); aiText = aiText.substring(cut);
+    if (aiRes.ok) {
+      var aiData = await aiRes.json(); var aiText = "";
+      for (var i = 0; i < aiData.content.length; i++) { if (aiData.content[i].type === "text") aiText += aiData.content[i].text; }
+      if (aiText) await sendAItoChannel(webhooks.aiPicks, aiText, "# 🧠 AI Sportsbook Best Bets", "Powered by Claude AI | Not financial advice");
+    } else { var err = await aiRes.text(); await post(webhooks.aiPicks, "⚠️ AI error: HTTP " + aiRes.status + " — " + err.substring(0, 200), null); }
+  } catch (e) { await post(webhooks.aiPicks, "⚠️ AI error: " + e.message, null); }
+  if (polyInfo && webhooks.polymarket) {
+    var polyPrompt = "You are an elite prediction market analyst. Today is " + today + ".\n\n";
+    polyPrompt += "=== POLYMARKET PREDICTION MARKETS (real money crowd odds) ===\n" + polyInfo + "\n";
+    if (gameList) { polyPrompt += "=== TODAY'S SPORTS GAMES FOR CONTEXT ===\n" + gameList + "\n"; }
+    polyPrompt += "Give me your TOP 5 POLYMARKET PLAYS.\nFor each: the market question, your pick (Yes/No at what price), confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences on WHY this is mispriced or correctly priced. Consider public bias, sharp money, current form, and what the crowd is over/under-weighting.\n\n";
+    polyPrompt += "Format:\nMARKET: [question]\nPICK: [Yes/No] at [price]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\nBe bold. Identify where the crowd is WRONG.";
+    try {
+      await post(webhooks.polymarket, "📊 Analyzing Polymarket...", null);
+      var polyRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1500, messages: [{ role: "user", content: polyPrompt }] })
+      });
+      if (polyRes.ok) {
+        var polyData = await polyRes.json(); var polyText = "";
+        for (var i = 0; i < polyData.content.length; i++) { if (polyData.content[i].type === "text") polyText += polyData.content[i].text; }
+        if (polyText) await sendAItoChannel(webhooks.polymarket, polyText, "# 📊 AI Polymarket Plays", "Polymarket analysis by Claude AI | Not financial advice");
+      } else { await post(webhooks.polymarket, "⚠️ Polymarket AI error: HTTP " + polyRes.status, null); }
+    } catch (e) { await post(webhooks.polymarket, "⚠️ Polymarket AI error: " + e.message, null); }
+  }
+  var parlayPrompt = "You are an elite sports betting analyst. Today is " + today + ".\n\n";
+  parlayPrompt += "Games today:\n" + gameList + "\n";
+  if (evSummary) { parlayPrompt += "+EV opportunities:\n" + evSummary + "\n"; }
+  if (polyInfo) { parlayPrompt += "Polymarket odds:\n" + polyInfo + "\n"; }
+  parlayPrompt += "Give me:\n1. A brief 3-4 sentence DAILY SUMMARY of today's betting landscape\n2. Your PARLAY OF THE DAY (3-4 legs) with reasoning for each leg and the combined odds estimate\n3. A LOCK OF THE DAY — your single highest confidence play with a short explanation\n\nKeep it punchy and confident.";
+  try {
+    var parlayRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 800, messages: [{ role: "user", content: parlayPrompt }] })
+    });
+    if (parlayRes.ok) {
+      var parlayData = await parlayRes.json(); var parlayText = "";
+      for (var i = 0; i < parlayData.content.length; i++) { if (parlayData.content[i].type === "text") parlayText += parlayData.content[i].text; }
+      if (parlayText) await sendAItoChannel(webhooks.announcements, parlayText, "# 📢 Daily Summary & Parlay of the Day", "Daily briefing by Claude AI | Gamble responsibly");
     }
-    await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "# 🧠 AI Best Bets + Polymarket Plays" }) });
-    await new Promise(function(r) { setTimeout(r, 500); });
-    for (var c = 0; c < chunks.length; c++) {
-      var embed = { description: chunks[c], color: 0x7C3AED };
-      if (c === chunks.length - 1) embed.footer = { text: "Powered by Claude AI + Polymarket | Not financial advice" };
-      await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", embeds: [embed] }) });
-      if (c < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 500); });
-    }
-  } catch (e) { await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "⚠️ AI error: " + e.message }) }); }
+  } catch (e) {}
 }
 export async function handler(event) {
   var ODDS_API_KEY = (process.env.ODDS_API_KEY || "").trim();
-  var DISCORD_WEBHOOK = (process.env.DISCORD_WEBHOOK || "").trim();
   var ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
   var BANKROLL = parseFloat(process.env.BANKROLL || "1000");
+  var webhooks = {
+    evPlays: (process.env.WEBHOOK_EV_PLAYS || "").trim(),
+    aiPicks: (process.env.WEBHOOK_AI_PICKS || "").trim(),
+    polymarket: (process.env.WEBHOOK_POLYMARKET || "").trim(),
+    backtest: (process.env.WEBHOOK_BACKTEST || "").trim(),
+    announcements: (process.env.WEBHOOK_ANNOUNCEMENTS || "").trim()
+  };
   if (!ODDS_API_KEY) return { statusCode: 500, body: "Missing ODDS_API_KEY" };
-  if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing DISCORD_WEBHOOK" };
+  if (!webhooks.evPlays) return { statusCode: 500, body: "Missing WEBHOOK_EV_PLAYS" };
   var allBets = []; var allGames = []; var creditsUsed = 0; var sportsScanned = 0; var errors = [];
   for (var s = 0; s < SPORTS.length; s++) {
     var sport = SPORTS[s]; var events;
@@ -302,17 +321,13 @@ export async function handler(event) {
   var seen = {}; var bets = [];
   for (var i = 0; i < allBets.length; i++) { var b = allBets[i]; var k = b.bookName + "|" + b.pick + "|" + b.game + "|" + b.marketLabel; if (!seen[k]) { seen[k] = true; bets.push(b); } }
   bets.sort(function(a, b) { return b.ev - a.ev; });
-  var summary = bets.length + " bets, " + sportsScanned + " sports, ~" + creditsUsed + " credits, $" + BANKROLL + " bankroll";
+  var summary = bets.length + " bets, " + sportsScanned + " sports, ~" + creditsUsed + " credits, " + polyMarkets.length + " poly markets";
   if (errors.length) summary += " | ERRORS: " + errors.join(",");
-  if (bets.length) { await sendToDiscord(DISCORD_WEBHOOK, bets, BANKROLL); }
-  else { await fetch(DISCORD_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "📭 **No +EV bets found.** " + sportsScanned + " sports. ~" + creditsUsed + " credits." }) }); }
-  if (bets.length) {
-    await new Promise(function(r) { setTimeout(r, 1000); });
-    await sendBacktest(DISCORD_WEBHOOK, bets, BANKROLL);
-  }
+  if (bets.length && webhooks.evPlays) { await sendEVPlays(webhooks.evPlays, bets, BANKROLL); }
+  else if (webhooks.evPlays) { await post(webhooks.evPlays, "📭 **No +EV bets found.** " + sportsScanned + " sports. ~" + creditsUsed + " credits.", null); }
+  if (bets.length && webhooks.backtest) { await sendBacktest(webhooks.backtest, bets, BANKROLL); }
   if (ANTHROPIC_KEY && (allGames.length > 0 || polyMarkets.length > 0)) {
-    await new Promise(function(r) { setTimeout(r, 1500); });
-    await getAIPicks(allGames, bets, polyMarkets, ANTHROPIC_KEY, DISCORD_WEBHOOK);
+    await runAI(allGames, bets, polyMarkets, ANTHROPIC_KEY, webhooks);
     summary += " + AI picks";
   }
   return { statusCode: 200, body: summary };
