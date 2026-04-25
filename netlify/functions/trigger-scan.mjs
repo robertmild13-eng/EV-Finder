@@ -1,3 +1,5 @@
+import { schedule } from "@netlify/functions";
+
 var ODDS_API_BASE = "https://api.the-odds-api.com/v4";
 var MIN_EV = 0.01;
 var MAX_BETS = 25;
@@ -112,7 +114,7 @@ function buildDiscordEmbeds(bets) {
     sportCounts[k] = (sportCounts[k] || 0) + 1;
   }
   var sportSummary = Object.keys(sportCounts).map(function(k) { return k + ": " + sportCounts[k]; }).join(" | ");
-  var summaryEmbed = { title: "📈 +EV Best Bets", description: today + "\n\n" + sportSummary, color: 0x00e676, fields: [{ name: "Opportunities", value: "" + bets.length, inline: true },{ name: "Avg EV", value: fmtEV(avgEV), inline: true },{ name: "Top EV", value: fmtEV(topEV), inline: true }], footer: { text: "Sharp: Pinnacle (de-vigged) | Gamble responsibly" }, timestamp: new Date().toISOString() };
+  var summaryEmbed = { title: "📈 +EV Best Bets (Auto Scan)", description: today + "\n\n" + sportSummary, color: 0x00e676, fields: [{ name: "Opportunities", value: "" + bets.length, inline: true },{ name: "Avg EV", value: fmtEV(avgEV), inline: true },{ name: "Top EV", value: fmtEV(topEV), inline: true }], footer: { text: "Sharp: Pinnacle (de-vigged) | Auto-scan 10 AM ET daily" }, timestamp: new Date().toISOString() };
   var betEmbeds = [];
   for (var i = 0; i < top.length; i += 5) {
     var chunk = top.slice(i, i + 5);
@@ -132,52 +134,33 @@ async function sendToDiscord(webhookUrl, bets) {
   for (var i = 0; i < embeds.length; i += 10) {
     var batch = embeds.slice(i, i + 10);
     var payload = { username: "+EV Finder", embeds: batch };
-    if (i === 0) payload.content = "# 🎯 Today's +EV Plays";
+    if (i === 0) payload.content = "# 🎯 Daily +EV Plays (Auto)";
     var res = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!res.ok) throw new Error("Discord: " + res.status);
     if (i + 10 < embeds.length) await new Promise(function(r) { setTimeout(r, 1000); });
   }
 }
-export async function handler(event) {
+
+export const handler = schedule("0 14 * * *", async function(event) {
   var ODDS_API_KEY = (process.env.ODDS_API_KEY || "").trim();
   var DISCORD_WEBHOOK = (process.env.DISCORD_WEBHOOK || "").trim();
-  if (!ODDS_API_KEY) return { statusCode: 500, body: "Missing ODDS_API_KEY" };
-  if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing DISCORD_WEBHOOK" };
+  if (!ODDS_API_KEY || !DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing env vars" };
   var allBets = [];
   var creditsUsed = 0;
   var sportsScanned = 0;
-  var errors = [];
   for (var s = 0; s < SPORTS.length; s++) {
     var sport = SPORTS[s];
-    var url = ODDS_API_BASE + "/sports/" + sport.key + "/odds/?apiKey=" + ODDS_API_KEY + "&regions=" + REGIONS + "&markets=" + GAME_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS;
     var events;
     try {
-      var res = await fetch(url);
-      if (!res.ok) {
-        var errText = await res.text();
-        errors.push(sport.label + ":HTTP" + res.status + ":" + errText.substring(0, 60));
-        if (res.status === 429) break;
-        continue;
-      }
+      var res = await fetch(ODDS_API_BASE + "/sports/" + sport.key + "/odds/?apiKey=" + ODDS_API_KEY + "&regions=" + REGIONS + "&markets=" + GAME_MARKETS + "&oddsFormat=american&bookmakers=" + ALL_BOOKS);
+      if (!res.ok) { if (res.status === 429) break; continue; }
       events = await res.json();
       creditsUsed += 6;
-    } catch (e) {
-      errors.push(sport.label + ":ERR:" + e.message);
-      continue;
-    }
+    } catch (e) { continue; }
     if (!events || !events.length) continue;
     sportsScanned++;
-    var hasPinnacle = false;
-    for (var ei = 0; ei < events.length; ei++) {
-      if (events[ei].bookmakers) {
-        for (var bi = 0; bi < events[ei].bookmakers.length; bi++) {
-          if (events[ei].bookmakers[bi].key === "pinnacle") { hasPinnacle = true; break; }
-        }
-      }
-      if (hasPinnacle) break;
-    }
     allBets = allBets.concat(extractEV(events, sport.label, sport.icon, false));
-    if (sport.props && hasPinnacle) {
+    if (sport.props) {
       var firstSharp = null;
       for (var ei = 0; ei < events.length; ei++) {
         if (events[ei].bookmakers) {
@@ -211,12 +194,10 @@ export async function handler(event) {
     if (!seen[k]) { seen[k] = true; bets.push(b); }
   }
   bets.sort(function(a, b) { return b.ev - a.ev; });
-  var summary = bets.length + " bets, " + sportsScanned + " sports, ~" + creditsUsed + " credits";
-  if (errors.length) summary += " | ERRORS: " + errors.join(" || ");
   if (!bets.length) {
-    await fetch(DISCORD_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "📭 **No +EV bets found.**\n" + summary }) });
-    return { statusCode: 200, body: summary };
+    await fetch(DISCORD_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "+EV Finder", content: "📭 **Daily auto-scan: No +EV bets found.** Scanned " + sportsScanned + " sports. ~" + creditsUsed + " credits." }) });
+    return { statusCode: 200, body: "No bets" };
   }
   await sendToDiscord(DISCORD_WEBHOOK, bets);
-  return { statusCode: 200, body: summary };
-}
+  return { statusCode: 200, body: "Sent " + bets.length + " bets" };
+});
