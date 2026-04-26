@@ -2,6 +2,7 @@ var ODDS_API_BASE = "https://api.the-odds-api.com/v4";
 var POLY_API = "https://gamma-api.polymarket.com";
 var MIN_EV = 0.01;
 var MAX_BETS = 25;
+var SLOGAN = "🍊 The Juice Report — Squeeze the Edge";
 var SPORTS = [
   { key: "basketball_nba", label: "NBA", icon: "🏀", props: true },
   { key: "baseball_mlb", label: "MLB", icon: "⚾", props: true },
@@ -135,7 +136,7 @@ async function sendEVPlays(webhook, bets, bankroll) {
     { name: "💰 Bankroll", value: "$" + bankroll.toLocaleString(), inline: true },
     { name: "📊 Total Kelly Risk", value: "$" + totalKellyRisk.toFixed(2), inline: true },
     { name: "📈 Expected Profit", value: "$" + totalExpProfit.toFixed(2), inline: true }
-  ], footer: { text: "Quarter-Kelly sizing | Sharp: Pinnacle (de-vigged)" }, timestamp: new Date().toISOString() };
+  ], footer: { text: SLOGAN + " | Quarter-Kelly sizing | Sharp: Pinnacle (de-vigged)" }, timestamp: new Date().toISOString() };
   await post(webhook, "# 🎯 Today's +EV Plays", [summaryEmbed]);
   for (var i = 0; i < top.length; i += 5) {
     var chunk = top.slice(i, i + 5); var fields = [];
@@ -145,7 +146,9 @@ async function sendEVPlays(webhook, bets, bankroll) {
       var kellyStr = b.kelly.betSize > 0 ? "\n💰 Bet: **$" + b.kelly.betSize.toFixed(2) + "** (Kelly: " + (b.kelly.quarter * 100).toFixed(1) + "%)" : "";
       fields.push({ name: rank + ". " + b.icon + " " + b.sport + " · " + b.marketLabel, value: "**" + b.pick + "**\n" + b.game + (b.time ? " · " + b.time : "") + "\n📍 **" + b.bookName + "**: `" + fmtOdds(b.bookOdds) + "` → Sharp: `" + fmtOdds(b.sharpOdds) + "`\n" + evEmoji + " EV: **" + fmtEV(b.ev) + "** · Edge: **" + fmtPct(b.edge) + "**" + kellyStr, inline: false });
     }
-    await post(webhook, null, [{ color: 0x1a1a25, fields: fields }]);
+    var chunkEmbed = { color: 0x1a1a25, fields: fields };
+    if (i + 5 >= top.length) chunkEmbed.footer = { text: SLOGAN };
+    await post(webhook, null, [chunkEmbed]);
   }
 }
 async function sendBacktest(webhook, bets, bankroll) {
@@ -174,7 +177,7 @@ async function sendBacktest(webhook, bets, bankroll) {
     { name: "📋 Flat $100", value: "Risk: **$" + (bets.length * 100) + "**\nExp Profit: **$" + flat100Profit.toFixed(2) + "**", inline: false },
     { name: "📈 By Sport", value: sportLines, inline: false },
     { name: "⚠️ Remember", value: "Edge shows over volume (1000+ bets). Single-day variance is high. Trust the math, stay disciplined.", inline: false }
-  ], footer: { text: "Expected value simulation | Not guaranteed results" }, timestamp: new Date().toISOString() }]);
+  ], footer: { text: SLOGAN + " | Expected value simulation | Not guaranteed results" }, timestamp: new Date().toISOString() }]);
 }
 async function sendAItoChannel(webhook, aiText, title, footerText) {
   var chunks = [];
@@ -229,7 +232,7 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
     if (aiRes.ok) {
       var aiData = await aiRes.json(); var aiText = "";
       for (var i = 0; i < aiData.content.length; i++) { if (aiData.content[i].type === "text") aiText += aiData.content[i].text; }
-      if (aiText) await sendAItoChannel(webhooks.aiPicks, aiText, "# 🧠 AI Sportsbook Best Bets", "Powered by Claude AI | Not financial advice");
+      if (aiText) await sendAItoChannel(webhooks.aiPicks, aiText, "# 🧠 AI Sportsbook Best Bets", SLOGAN + " | Powered by Claude AI | Not financial advice");
     } else { var err = await aiRes.text(); await post(webhooks.aiPicks, "⚠️ AI error: HTTP " + aiRes.status + " — " + err.substring(0, 200), null); }
   } catch (e) { await post(webhooks.aiPicks, "⚠️ AI error: " + e.message, null); }
   if (polyInfo && webhooks.polymarket) {
@@ -248,7 +251,7 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
       if (polyRes.ok) {
         var polyData = await polyRes.json(); var polyText = "";
         for (var i = 0; i < polyData.content.length; i++) { if (polyData.content[i].type === "text") polyText += polyData.content[i].text; }
-        if (polyText) await sendAItoChannel(webhooks.polymarket, polyText, "# 📊 AI Polymarket Plays", "Polymarket analysis by Claude AI | Not financial advice");
+        if (polyText) await sendAItoChannel(webhooks.polymarket, polyText, "# 📊 AI Polymarket Plays", SLOGAN + " | Polymarket analysis by Claude AI | Not financial advice");
       } else { await post(webhooks.polymarket, "⚠️ Polymarket AI error: HTTP " + polyRes.status, null); }
     } catch (e) { await post(webhooks.polymarket, "⚠️ Polymarket AI error: " + e.message, null); }
   }
@@ -266,7 +269,7 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
     if (parlayRes.ok) {
       var parlayData = await parlayRes.json(); var parlayText = "";
       for (var i = 0; i < parlayData.content.length; i++) { if (parlayData.content[i].type === "text") parlayText += parlayData.content[i].text; }
-      if (parlayText) await sendAItoChannel(webhooks.announcements, parlayText, "# 📢 Daily Summary & Parlay of the Day", "Daily briefing by Claude AI | Gamble responsibly");
+      if (parlayText) await sendAItoChannel(webhooks.announcements, parlayText, "# 📢 Daily Summary & Parlay of the Day", SLOGAN + " | Daily briefing by Claude AI | Gamble responsibly");
     }
   } catch (e) {}
 }
