@@ -6,9 +6,9 @@ export async function handler(event) {
   if (!input) {
     return {
       statusCode: 200,
-     headers: { "Content-Type": "text/plain; charset=utf-8" },
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
       body: [
-        "🍊 The Juice Report — Odds Converter",
+        "THE JUICE REPORT - ODDS CONVERTER",
         "",
         "Usage:",
         "  ?price=65        Polymarket cents to American",
@@ -17,24 +17,22 @@ export async function handler(event) {
         "  ?odds=2.50&mode=decimal  Decimal to everything",
         "",
         "Examples:",
-        "  /convert?price=65    → -186 American, 1.54 decimal, 65% implied",
-        "  /convert?odds=-150   → 60¢ Polymarket, 1.67 decimal, 60% implied",
-        "  /convert?price=25    → +300 American, 4.00 decimal, 25% implied",
-        "",
-        "Base URL: https://evfindermurray.netlify.app/.netlify/functions/convert"
+        "  /convert?price=65    -> -186 American, 1.54 decimal, 65% implied",
+        "  /convert?odds=-150   -> 60c Polymarket, 1.67 decimal, 60% implied",
+        "  /convert?price=25    -> +300 American, 4.00 decimal, 25% implied",
       ].join("\n")
     };
   }
 
   var val = parseFloat(input);
   if (isNaN(val)) {
-    return { statusCode: 200, headers: { "Content-Type": "text/plain" }, body: "❌ Invalid input: " + input };
+    return { statusCode: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "Invalid input: " + input };
   }
 
   var polyPrice, americanOdds, decimalOdds, impliedProb;
 
   if (mode === "decimal") {
-    if (val <= 1) return { statusCode: 200, headers: { "Content-Type": "text/plain" }, body: "❌ Decimal odds must be greater than 1.00" };
+    if (val <= 1) return { statusCode: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "Decimal odds must be greater than 1.00" };
     decimalOdds = val;
     impliedProb = 1 / val;
     polyPrice = impliedProb;
@@ -45,7 +43,6 @@ export async function handler(event) {
     }
   } else if (mode === "american" || (mode === "auto" && (val < -100 || val > 100))) {
     if (val > -100 && val < 100 && val !== 0) {
-      // Probably polymarket, not american
       if (val > 0 && val < 1) {
         polyPrice = val;
         impliedProb = val;
@@ -77,10 +74,9 @@ export async function handler(event) {
       polyPrice = impliedProb;
     }
   } else {
-    // Polymarket mode
     if (val > 1 && val <= 100) val = val / 100;
     if (val <= 0 || val >= 1) {
-      return { statusCode: 200, headers: { "Content-Type": "text/plain" }, body: "❌ Polymarket price must be between 1-99 (cents) or 0.01-0.99" };
+      return { statusCode: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "Polymarket price must be between 1-99 (cents) or 0.01-0.99" };
     }
     polyPrice = val;
     impliedProb = val;
@@ -96,54 +92,39 @@ export async function handler(event) {
   var payout100 = (100 / polyPrice).toFixed(2);
   var profit100 = (100 / polyPrice - 100).toFixed(2);
   var side = impliedProb >= 0.5 ? "FAVORITE" : "UNDERDOG";
-  var emoji = impliedProb >= 0.7 ? "🔒" : impliedProb >= 0.5 ? "📊" : impliedProb >= 0.3 ? "🎯" : "🎲";
 
   var body = [
-    "🍊 THE JUICE REPORT — ODDS CONVERTER",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "THE JUICE REPORT -- ODDS CONVERTER",
+    "==============================",
     "",
-    emoji + " " + side + " (" + (impliedProb * 100).toFixed(1) + "% implied probability)",
+    side + " (" + (impliedProb * 100).toFixed(1) + "% implied probability)",
     "",
-    "📊 Polymarket:  " + (polyPrice * 100).toFixed(0) + "¢  ($" + polyPrice.toFixed(2) + " per share)",
-    "🇺🇸 American:    " + fmtAmerican,
-    "🔢 Decimal:     " + decimalOdds.toFixed(2),
-    "📈 Implied:     " + (impliedProb * 100).toFixed(1) + "%",
+    "Polymarket:  " + (polyPrice * 100).toFixed(0) + "c  ($" + polyPrice.toFixed(2) + " per share)",
+    "American:    " + fmtAmerican,
+    "Decimal:     " + decimalOdds.toFixed(2),
+    "Implied:     " + (impliedProb * 100).toFixed(1) + "%",
     "",
-    "💰 $100 bet pays:   $" + payout100,
-    "💵 Profit on $100:  $" + profit100,
+    "$100 bet pays:   $" + payout100,
+    "Profit on $100:  $" + profit100,
     "",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "==============================",
   ];
 
-  if (impliedProb >= 0.5) {
-    var noPrice = 1 - polyPrice;
-    var noAmerican;
-    if (noPrice >= 0.5) {
-      noAmerican = Math.round((-noPrice / (1 - noPrice)) * 100);
-    } else {
-      noAmerican = Math.round(((1 - noPrice) / noPrice) * 100);
-    }
-    var fmtNo = noAmerican > 0 ? "+" + noAmerican : "" + noAmerican;
-    body.push("🔄 Other side: " + (noPrice * 100).toFixed(0) + "¢ poly = " + fmtNo + " American");
-    body.push("");
+  var otherPrice = 1 - polyPrice;
+  var otherAmerican;
+  if (otherPrice >= 0.5) {
+    otherAmerican = Math.round((-otherPrice / (1 - otherPrice)) * 100);
   } else {
-    var yesPrice = 1 - polyPrice;
-    var yesAmerican;
-    if (yesPrice >= 0.5) {
-      yesAmerican = Math.round((-yesPrice / (1 - yesPrice)) * 100);
-    } else {
-      yesAmerican = Math.round(((1 - yesPrice) / yesPrice) * 100);
-    }
-    var fmtYes = yesAmerican > 0 ? "+" + yesAmerican : "" + yesAmerican;
-    body.push("🔄 Other side: " + (yesPrice * 100).toFixed(0) + "¢ poly = " + fmtYes + " American");
-    body.push("");
+    otherAmerican = Math.round(((1 - otherPrice) / otherPrice) * 100);
   }
-
-  body.push("Squeeze the edge 🍊");
+  var fmtOther = otherAmerican > 0 ? "+" + otherAmerican : "" + otherAmerican;
+  body.push("Other side: " + (otherPrice * 100).toFixed(0) + "c poly = " + fmtOther + " American");
+  body.push("");
+  body.push("The Juice Report -- Squeeze the Edge");
 
   return {
     statusCode: 200,
-    headers: { "Content-Type": "text/plain" },
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
     body: body.join("\n")
   };
 }
