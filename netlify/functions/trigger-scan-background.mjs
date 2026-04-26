@@ -295,6 +295,18 @@ export async function handler(event) {
       events = await res.json(); creditsUsed += 6;
     } catch (e) { errors.push(sport.label + ":ERR"); continue; }
     if (!events || !events.length) continue;
+    var now = new Date();
+    var todayStr = now.toISOString().slice(0, 10);
+    var tomorrowDate = new Date(now.getTime() + 86400000);
+    var tomorrowStr = tomorrowDate.toISOString().slice(0, 10);
+    events = events.filter(function(ev) {
+      var gameTime = new Date(ev.commence_time);
+      var gameDate = ev.commence_time.slice(0, 10);
+      if (gameDate !== todayStr && gameDate !== tomorrowStr) return false;
+      if (gameTime < now) return false;
+      return true;
+    });
+    if (!events.length) continue;
     sportsScanned++;
     for (var gi = 0; gi < events.length; gi++) {
       var ge = events[gi]; var gameOdds = "";
