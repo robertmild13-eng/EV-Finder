@@ -1,6 +1,5 @@
 export async function handler(event) {
-  var DISCORD_WEBHOOK = (process.env.WEBHOOK_ANNOUNCEMENTS || process.env.DISCORD_WEBHOOK || "").trim();
-  var ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
+var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUNCEMENTS || "").trim();  var ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
   var ODDS_API_KEY = (process.env.ODDS_API_KEY || "").trim();
 
   if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing webhook" };
