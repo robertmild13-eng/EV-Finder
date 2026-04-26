@@ -6,7 +6,7 @@ export async function handler(event) {
   if (!input) {
     return {
       statusCode: 200,
-      headers: { "Content-Type": "text/plain" },
+     headers: { "Content-Type": "text/plain; charset=utf-8" },
       body: [
         "🍊 The Juice Report — Odds Converter",
         "",
