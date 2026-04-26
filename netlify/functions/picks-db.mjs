@@ -1,7 +1,16 @@
 import { getStore } from "@netlify/blobs";
 
 export async function handler(event) {
-  var store = getStore("picks");
+  var siteID = (process.env.NETLIFY_SITE_ID || "").trim();
+  var token = (process.env.NETLIFY_TOKEN || "").trim();
+
+  var store;
+  if (siteID && token) {
+    store = getStore({ name: "picks", siteID: siteID, token: token });
+  } else {
+    return { statusCode: 500, body: "Missing NETLIFY_SITE_ID or NETLIFY_TOKEN env vars" };
+  }
+
   var method = event.httpMethod;
 
   if (method === "POST") {
@@ -30,7 +39,7 @@ export async function handler(event) {
         var history = await store.get("history", { type: "json" }) || {};
         return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify(history) };
       } catch(e) {
-        return { statusCode: 200, body: "{}" };
+        return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: "{}" };
       }
     }
 
