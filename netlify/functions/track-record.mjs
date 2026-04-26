@@ -1,22 +1,23 @@
 export async function handler(event) {
-var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUNCEMENTS || "").trim();  var ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
+  var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUNCEMENTS || "").trim();
+  var ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
   var ODDS_API_KEY = (process.env.ODDS_API_KEY || "").trim();
 
   if (!DISCORD_WEBHOOK) return { statusCode: 500, body: "Missing webhook" };
   if (!ANTHROPIC_KEY) return { statusCode: 500, body: "Missing ANTHROPIC_API_KEY" };
 
-  var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  var now = new Date();
+  var today = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
 
-  // Fetch yesterday's/today's completed games
   var completedGames = [];
   var sports = [
-    { key: "basketball_nba", label: "NBA", icon: "🏀" },
-    { key: "baseball_mlb", label: "MLB", icon: "⚾" },
-    { key: "icehockey_nhl", label: "NHL", icon: "🏒" },
-    { key: "basketball_wnba", label: "WNBA", icon: "🏀" },
-    { key: "soccer_epl", label: "EPL", icon: "⚽" },
-    { key: "soccer_usa_mls", label: "MLS", icon: "⚽" },
-    { key: "soccer_spain_la_liga", label: "La Liga", icon: "⚽" },
+    { key: "basketball_nba", label: "NBA", icon: "NBA" },
+    { key: "baseball_mlb", label: "MLB", icon: "MLB" },
+    { key: "icehockey_nhl", label: "NHL", icon: "NHL" },
+    { key: "basketball_wnba", label: "WNBA", icon: "WNBA" },
+    { key: "soccer_epl", label: "EPL", icon: "EPL" },
+    { key: "soccer_usa_mls", label: "MLS", icon: "MLS" },
+    { key: "soccer_spain_la_liga", label: "La Liga", icon: "La Liga" },
   ];
 
   if (ODDS_API_KEY) {
@@ -28,22 +29,22 @@ var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUN
           for (var j = 0; j < scores.length; j++) {
             var game = scores[j];
             if (game.completed) {
-              var homeScore = null;
-              var awayScore = null;
+              var homeScore = 0;
+              var awayScore = 0;
               if (game.scores) {
                 for (var s = 0; s < game.scores.length; s++) {
-                  if (game.scores[s].name === game.home_team) homeScore = game.scores[s].score;
-                  if (game.scores[s].name === game.away_team) awayScore = game.scores[s].score;
+                  if (game.scores[s].name === game.home_team) homeScore = parseInt(game.scores[s].score) || 0;
+                  if (game.scores[s].name === game.away_team) awayScore = parseInt(game.scores[s].score) || 0;
                 }
               }
+              var winner = homeScore > awayScore ? game.home_team : (awayScore > homeScore ? game.away_team : "TIE");
               completedGames.push({
                 sport: sports[i].label,
-                icon: sports[i].icon,
                 home: game.home_team,
                 away: game.away_team,
                 homeScore: homeScore,
                 awayScore: awayScore,
-                winner: homeScore > awayScore ? game.home_team : game.away_team
+                winner: winner
               });
             }
           }
@@ -54,28 +55,41 @@ var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUN
 
   var gamesInfo = "";
   if (completedGames.length) {
-    gamesInfo = "COMPLETED GAMES FROM LAST 24 HOURS:\n";
+    var bySport = {};
     for (var i = 0; i < completedGames.length; i++) {
       var g = completedGames[i];
-      gamesInfo += g.icon + " " + g.sport + ": " + g.away + " " + (g.awayScore || "?") + " @ " + g.home + " " + (g.homeScore || "?") + " (Winner: " + g.winner + ")\n";
+      if (!bySport[g.sport]) bySport[g.sport] = [];
+      bySport[g.sport].push(g);
+    }
+    gamesInfo = "COMPLETED GAMES (last 24 hours) with CORRECT scores and winners:\n\n";
+    var sportKeys = Object.keys(bySport);
+    for (var i = 0; i < sportKeys.length; i++) {
+      var sport = sportKeys[i];
+      gamesInfo += sport + ":\n";
+      for (var j = 0; j < bySport[sport].length; j++) {
+        var g = bySport[sport][j];
+        gamesInfo += "  " + g.away + " " + g.awayScore + " @ " + g.home + " " + g.homeScore + " -- Winner: " + g.winner + "\n";
+      }
+      gamesInfo += "\n";
     }
   }
 
-  var prompt = "You are a sports betting record keeper for The Juice Report. Today is " + today + ".\n\n";
+  var prompt = "You are the record keeper for The Juice Report, a sports betting Discord. Today's date in Eastern Time is " + today + ".\n\n";
+  prompt += "IMPORTANT: Use TODAY'S ACTUAL DATE (" + today + ") in your report. Do NOT use a different date.\n\n";
   prompt += gamesInfo + "\n";
-  prompt += "Based on the completed games above, generate a DAILY RESULTS REPORT for our Discord betting community.\n\n";
-  prompt += "Format it like this:\n\n";
-  prompt += "Start with a header line like: DAILY RESULTS - [date]\n\n";
-  prompt += "Then for each sport that had games, show:\n";
-  prompt += "[sport emoji] [SPORT NAME]\n";
-  prompt += "- [away team] [score] @ [home team] [score] -- WINNER: [team]\n\n";
-  prompt += "Then add a YESTERDAY'S PICKS REVIEW section where you:\n";
-  prompt += "- Simulate grading our +EV picks and AI picks against these results\n";
-  prompt += "- Give a realistic W-L record for the day (be honest, not every pick wins)\n";
-  prompt += "- Show a running simulated season record (start with a realistic record like 45-32 for a +EV system)\n";
-  prompt += "- Calculate ROI based on the record\n\n";
-  prompt += "End with a motivational line about trusting the process and the math.\n\n";
-  prompt += "Keep it concise and formatted for Discord. Use ** for bold.";
+  prompt += "IMPORTANT RULES:\n";
+  prompt += "1. The scores and winners above are CORRECT from the API. Do NOT change any winners. The team with the HIGHER score wins.\n";
+  prompt += "2. You do NOT know what picks we actually made yesterday. So do NOT make up fake pick results.\n";
+  prompt += "3. Instead, generate the report in this format:\n\n";
+  prompt += "SECTION 1: SCOREBOARD\n";
+  prompt += "List all completed games organized by sport. Show: [Away] [score] @ [Home] [score] -- W: [winner]\n";
+  prompt += "Use the EXACT scores and winners from the data above. Do not modify them.\n\n";
+  prompt += "SECTION 2: KEY TAKEAWAYS\n";
+  prompt += "Pick 3-5 interesting results and give a one-line sharp take on each (upsets, blowouts, trends).\n\n";
+  prompt += "SECTION 3: MARKET MOVERS\n";
+  prompt += "Note which results would have impacted betting markets -- big upsets that sportsbooks got wrong, games that went over/under by a lot, etc.\n\n";
+  prompt += "End with: Track your own bets against our daily picks to build your personal record. Trust the math.\n\n";
+  prompt += "Keep it concise. Use ** for bold in Discord formatting. Use --- for dividers.";
 
   try {
     var aiRes = await fetch("https://api.anthropic.com/v1/messages", {
@@ -97,7 +111,6 @@ var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUN
 
     if (!aiText) return { statusCode: 200, body: "AI returned empty" };
 
-    // Split into chunks for Discord
     var chunks = [];
     while (aiText.length > 0) {
       if (aiText.length <= 1900) { chunks.push(aiText); break; }
@@ -107,15 +120,13 @@ var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUN
       aiText = aiText.substring(cut);
     }
 
-    // Post header
     await fetch(DISCORD_WEBHOOK, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "The Juice Report", content: "# 📋 Daily Results & Track Record" })
+      body: JSON.stringify({ username: "The Juice Report", content: "# Daily Results & Track Record" })
     });
     await new Promise(function(r) { setTimeout(r, 500); });
 
-    // Post each chunk
     for (var c = 0; c < chunks.length; c++) {
       await fetch(DISCORD_WEBHOOK, {
         method: "POST",
@@ -125,14 +136,14 @@ var DISCORD_WEBHOOK = (process.env.WEBHOOK_RESULTS || process.env.WEBHOOK_ANNOUN
           embeds: [{
             description: chunks[c],
             color: 0xFF9800,
-            footer: c === chunks.length - 1 ? { text: "The Juice Report -- Track Record | Updated Daily" } : undefined
+            footer: c === chunks.length - 1 ? { text: "The Juice Report -- Results | " + today } : undefined
           }]
         })
       });
       if (c < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 500); });
     }
 
-    return { statusCode: 200, body: "Track record posted. " + completedGames.length + " completed games found." };
+    return { statusCode: 200, body: "Results posted. " + completedGames.length + " games. Date: " + today };
   } catch (e) {
     return { statusCode: 200, body: "Error: " + e.message };
   }
