@@ -8,16 +8,57 @@ export async function handler(event) {
 
   var now = new Date();
   var today = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
+  var todayKey = now.toISOString().slice(0, 10);
+  var yesterdayDate = new Date(now.getTime() - 86400000);
+  var yesterdayKey = yesterdayDate.toISOString().slice(0, 10);
 
+  // Load yesterday's saved picks
+  var savedPicks = null;
+  try {
+    var pickRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + yesterdayKey);
+    if (pickRes.ok) {
+      var pickText = await pickRes.text();
+      if (pickText && pickText.indexOf("{") === 0) {
+        savedPicks = JSON.parse(pickText);
+      }
+    }
+  } catch(e) {}
+
+  // Also try today's picks if yesterday has none
+  if (!savedPicks || !savedPicks.bets) {
+    try {
+      var pickRes2 = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + todayKey);
+      if (pickRes2.ok) {
+        var pickText2 = await pickRes2.text();
+        if (pickText2 && pickText2.indexOf("{") === 0) {
+          savedPicks = JSON.parse(pickText2);
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Load history
+  var history = {};
+  try {
+    var histRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=history");
+    if (histRes.ok) {
+      var histText = await histRes.text();
+      if (histText && histText.indexOf("{") === 0) {
+        history = JSON.parse(histText);
+      }
+    }
+  } catch(e) {}
+
+  // Fetch completed game scores
   var completedGames = [];
   var sports = [
-    { key: "basketball_nba", label: "NBA", icon: "NBA" },
-    { key: "baseball_mlb", label: "MLB", icon: "MLB" },
-    { key: "icehockey_nhl", label: "NHL", icon: "NHL" },
-    { key: "basketball_wnba", label: "WNBA", icon: "WNBA" },
-    { key: "soccer_epl", label: "EPL", icon: "EPL" },
-    { key: "soccer_usa_mls", label: "MLS", icon: "MLS" },
-    { key: "soccer_spain_la_liga", label: "La Liga", icon: "La Liga" },
+    { key: "basketball_nba", label: "NBA" },
+    { key: "baseball_mlb", label: "MLB" },
+    { key: "icehockey_nhl", label: "NHL" },
+    { key: "basketball_wnba", label: "WNBA" },
+    { key: "soccer_epl", label: "EPL" },
+    { key: "soccer_usa_mls", label: "MLS" },
+    { key: "soccer_spain_la_liga", label: "La Liga" },
   ];
 
   if (ODDS_API_KEY) {
@@ -37,15 +78,8 @@ export async function handler(event) {
                   if (game.scores[s].name === game.away_team) awayScore = parseInt(game.scores[s].score) || 0;
                 }
               }
-              var winner = homeScore > awayScore ? game.home_team : (awayScore > homeScore ? game.away_team : "TIE");
-              completedGames.push({
-                sport: sports[i].label,
-                home: game.home_team,
-                away: game.away_team,
-                homeScore: homeScore,
-                awayScore: awayScore,
-                winner: winner
-              });
+              var winner = homeScore > awayScore ? game.home_team : (awayScore > homeScore ? game.away_team : "DRAW");
+              completedGames.push({ sport: sports[i].label, home: game.home_team, away: game.away_team, homeScore: homeScore, awayScore: awayScore, winner: winner });
             }
           }
         }
@@ -53,6 +87,7 @@ export async function handler(event) {
     }
   }
 
+  // Build game results text
   var gamesInfo = "";
   if (completedGames.length) {
     var bySport = {};
@@ -61,41 +96,65 @@ export async function handler(event) {
       if (!bySport[g.sport]) bySport[g.sport] = [];
       bySport[g.sport].push(g);
     }
-    gamesInfo = "COMPLETED GAMES (last 24 hours) with CORRECT scores and winners:\n\n";
+    gamesInfo = "COMPLETED GAMES (scores are CORRECT from the API -- do NOT change winners):\n\n";
     var sportKeys = Object.keys(bySport);
     for (var i = 0; i < sportKeys.length; i++) {
-      var sport = sportKeys[i];
-      gamesInfo += sport + ":\n";
-      for (var j = 0; j < bySport[sport].length; j++) {
-        var g = bySport[sport][j];
+      gamesInfo += sportKeys[i] + ":\n";
+      for (var j = 0; j < bySport[sportKeys[i]].length; j++) {
+        var g = bySport[sportKeys[i]][j];
         gamesInfo += "  " + g.away + " " + g.awayScore + " @ " + g.home + " " + g.homeScore + " -- Winner: " + g.winner + "\n";
       }
       gamesInfo += "\n";
     }
   }
 
-  var prompt = "You are the record keeper for The Juice Report, a sports betting Discord. Today's date in Eastern Time is " + today + ".\n\n";
-  prompt += "IMPORTANT: Use TODAY'S ACTUAL DATE (" + today + ") in your report. Do NOT use a different date.\n\n";
-  prompt += gamesInfo + "\n";
-  prompt += "IMPORTANT RULES:\n";
-  prompt += "1. The scores and winners above are CORRECT from the API. Do NOT change any winners. The team with the HIGHER score wins.\n";
-  prompt += "2. You do NOT know what picks we actually made yesterday. So do NOT make up fake pick results.\n";
-  prompt += "3. Instead, generate the report in this format:\n\n";
-  prompt += "SECTION 1: SCOREBOARD\n";
-  prompt += "List all completed games organized by sport. Show: [Away] [score] @ [Home] [score] -- W: [winner]\n";
-  prompt += "Use the EXACT scores and winners from the data above. Do not modify them.\n\n";
-  prompt += "SECTION 2: KEY TAKEAWAYS\n";
-  prompt += "Pick 3-5 interesting results and give a one-line sharp take on each (upsets, blowouts, trends).\n\n";
-  prompt += "SECTION 3: MARKET MOVERS\n";
-  prompt += "Note which results would have impacted betting markets -- big upsets that sportsbooks got wrong, games that went over/under by a lot, etc.\n\n";
-  prompt += "End with: Track your own bets against our daily picks to build your personal record. Trust the math.\n\n";
-  prompt += "Keep it concise. Use ** for bold in Discord formatting. Use --- for dividers.";
+  // Build saved picks text
+  var picksInfo = "";
+  if (savedPicks && savedPicks.bets && savedPicks.bets.length) {
+    picksInfo = "OUR ACTUAL PICKS FROM THIS SCAN (these are the REAL picks we posted):\n\n";
+    for (var i = 0; i < savedPicks.bets.length; i++) {
+      var b = savedPicks.bets[i];
+      var fmtOdds = b.bookOdds > 0 ? "+" + b.bookOdds : "" + b.bookOdds;
+      picksInfo += (i + 1) + ". " + b.sport + " | " + b.pick + " | " + b.game + " | " + b.bookName + " " + fmtOdds + " | EV: " + (b.ev * 100).toFixed(2) + "% | Type: " + b.marketLabel + "\n";
+    }
+    picksInfo += "\n";
+  } else {
+    picksInfo = "NO SAVED PICKS FOUND for yesterday. This is the first run or picks were not saved.\n\n";
+  }
+
+  var historyInfo = "SCAN HISTORY:\n";
+  var histKeys = Object.keys(history).sort();
+  var totalDays = histKeys.length;
+  historyInfo += "Total days tracked: " + totalDays + "\n";
+  if (histKeys.length > 5) histKeys = histKeys.slice(-5);
+  for (var i = 0; i < histKeys.length; i++) {
+    historyInfo += "  " + histKeys[i] + ": " + history[histKeys[i]].bets + " bets across " + history[histKeys[i]].sports + " sports\n";
+  }
+  historyInfo += "\n";
+
+  var prompt = "You are the official record keeper for The Juice Report sports betting Discord. Today is " + today + " (Eastern Time). Use this EXACT date.\n\n";
+  prompt += gamesInfo;
+  prompt += picksInfo;
+  prompt += historyInfo;
+  prompt += "CRITICAL RULES:\n";
+  prompt += "1. Scores and winners above are from the official API. Do NOT change them. The team with MORE points/goals wins.\n";
+  prompt += "2. If we have saved picks, grade EACH ONE against the results. A moneyline pick WINS if the team we picked won. A spread pick needs the team to cover.\n";
+  prompt += "3. For totals (over/under), you may not have enough info to grade -- mark as PUSH or PENDING.\n";
+  prompt += "4. For player props, mark as PENDING since we don't have player stats.\n";
+  prompt += "5. If no saved picks exist, just show the scoreboard and key takeaways.\n\n";
+  prompt += "FORMAT YOUR REPORT:\n\n";
+  prompt += "SECTION 1: SCOREBOARD\nList games by sport: [Away] [score] @ [Home] [score] -- W: [winner]\n\n";
+  prompt += "SECTION 2: PICK GRADING (only if we have saved picks)\nGo through each pick and grade it: WIN / LOSS / PUSH / PENDING\nShow the pick, what happened, and the result.\nEnd with today's record: X-Y (W-L)\n\n";
+  prompt += "SECTION 3: RUNNING RECORD\nShow how many days we've tracked, today's record, and a note that the running record will build over time as we track more days.\n\n";
+  prompt += "SECTION 4: KEY TAKEAWAYS\n3-5 sharp one-line observations about the results (upsets, blowouts, trends).\n\n";
+  prompt += "End with: The math doesn't lie. Trust the process.\n\n";
+  prompt += "Use ** for bold. Use --- for dividers. Keep it concise for Discord.";
 
   try {
     var aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1500, messages: [{ role: "user", content: prompt }] })
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
     });
 
     if (!aiRes.ok) {
@@ -136,14 +195,15 @@ export async function handler(event) {
           embeds: [{
             description: chunks[c],
             color: 0xFF9800,
-            footer: c === chunks.length - 1 ? { text: "The Juice Report -- Results | " + today } : undefined
+            footer: c === chunks.length - 1 ? { text: "The Juice Report -- Track Record | " + today } : undefined
           }]
         })
       });
       if (c < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 500); });
     }
 
-    return { statusCode: 200, body: "Results posted. " + completedGames.length + " games. Date: " + today };
+    var picksGraded = savedPicks && savedPicks.bets ? savedPicks.bets.length : 0;
+    return { statusCode: 200, body: "Results posted. " + completedGames.length + " games, " + picksGraded + " picks graded." };
   } catch (e) {
     return { statusCode: 200, body: "Error: " + e.message };
   }
