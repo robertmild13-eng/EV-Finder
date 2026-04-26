@@ -330,5 +330,24 @@ export async function handler(event) {
     await runAI(allGames, bets, polyMarkets, ANTHROPIC_KEY, webhooks);
     summary += " + AI picks";
   }
+  try {
+    var todayKey = new Date().toISOString().slice(0, 10);
+    var picksToSave = [];
+    for (var i = 0; i < Math.min(bets.length, 30); i++) {
+      picksToSave.push({ sport: bets[i].sport, pick: bets[i].pick, game: bets[i].game, bookName: bets[i].bookName, bookOdds: bets[i].bookOdds, sharpOdds: bets[i].sharpOdds, ev: bets[i].ev, edge: bets[i].edge, type: bets[i].type, marketLabel: bets[i].marketLabel });
+    }
+    var gamesList = [];
+    var seenGames = {};
+    for (var i = 0; i < allGames.length; i++) {
+      var gk = allGames[i].away + "@" + allGames[i].home;
+      if (!seenGames[gk]) { seenGames[gk] = true; gamesList.push(allGames[i]); }
+    }
+    await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: todayKey, bets: picksToSave, games: gamesList, betCount: bets.length, sportsCount: sportsScanned, credits: creditsUsed })
+    });
+    summary += " | picks saved";
+  } catch (e) { summary += " | save error: " + e.message; }
   return { statusCode: 200, body: summary };
 }
