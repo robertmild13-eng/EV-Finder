@@ -90,20 +90,26 @@ function extractEV(events, sportLabel, sportIcon, propsOnly) {
 }
 async function fetchPolymarketSports() {
   var markets = [];
-  try {
-    var res = await fetch(POLY_API + "/markets?limit=100&active=true&tag=sports", { headers: { "User-Agent": "EVFinder/1.0" } });
-    if (!res.ok) return [];
-    var data = await res.json();
-    if (!Array.isArray(data)) return [];
-    for (var i = 0; i < data.length; i++) {
-      var m = data[i];
-      if (m.closed || !m.active) continue;
-      var outcomes = []; var outcomeNames = [];
-      try { outcomes = m.outcomePrices ? JSON.parse(m.outcomePrices) : []; } catch(e) {}
-      try { outcomeNames = m.outcomes ? (typeof m.outcomes === "string" ? JSON.parse(m.outcomes) : m.outcomes) : []; } catch(e) {}
-      markets.push({ question: m.question || "", outcomes: outcomeNames, prices: outcomes, volume: m.volume || 0 });
-    }
-  } catch (e) {}
+  var tags = ["sports", "nba", "mlb", "nhl", "nfl", "soccer", "mma", "tennis"];
+  var seen = {};
+  for (var t = 0; t < tags.length; t++) {
+    try {
+      var res = await fetch(POLY_API + "/markets?limit=40&active=true&tag=" + tags[t], { headers: { "User-Agent": "EVFinder/1.0" } });
+      if (!res.ok) continue;
+      var data = await res.json();
+      if (!Array.isArray(data)) continue;
+      for (var i = 0; i < data.length; i++) {
+        var m = data[i];
+        if (m.closed || !m.active) continue;
+        if (seen[m.question]) continue;
+        seen[m.question] = true;
+        var outcomes = []; var outcomeNames = [];
+        try { outcomes = m.outcomePrices ? JSON.parse(m.outcomePrices) : []; } catch(e) {}
+        try { outcomeNames = m.outcomes ? (typeof m.outcomes === "string" ? JSON.parse(m.outcomes) : m.outcomes) : []; } catch(e) {}
+        markets.push({ question: m.question || "", outcomes: outcomeNames, prices: outcomes, volume: m.volume || 0 });
+      }
+    } catch (e) {}
+  }
   return markets;
 }
 async function post(webhook, content, embeds) {
@@ -239,7 +245,7 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
     var polyPrompt = "You are an elite prediction market analyst. Today is " + today + ".\n\n";
     polyPrompt += "=== POLYMARKET PREDICTION MARKETS (real money crowd odds) ===\n" + polyInfo + "\n";
     if (gameList) { polyPrompt += "=== TODAY'S SPORTS GAMES FOR CONTEXT ===\n" + gameList + "\n"; }
-    polyPrompt += "Give me your TOP 5 POLYMARKET PLAYS.\nFor each: the market question, your pick (Yes/No at what price), confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences on WHY this is mispriced or correctly priced. Consider public bias, sharp money, current form, and what the crowd is over/under-weighting.\n\n";
+    polyPrompt += "Give me your TOP 5 POLYMARKET PLAYS.\nIMPORTANT: Today is " + today + ". Give FRESH analysis based on what happened in sports in the last 24 hours. Focus on markets where odds SHOULD be shifting based on recent results, injuries, or news. Do NOT repeat generic analysis.\nFor each: the market question, your pick (Yes/No at what price), confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences on WHY recent events make this mispriced RIGHT NOW. Consider public bias, sharp money, current form, and what the crowd is over/under-weighting.\n\n";
     polyPrompt += "Format:\nMARKET: [question]\nPICK: [Yes/No] at [price]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\nBe bold. Identify where the crowd is WRONG.";
     try {
       await post(webhooks.polymarket, "📊 Analyzing Polymarket...", null);
@@ -344,6 +350,50 @@ export async function handler(event) {
   if (ANTHROPIC_KEY && (allGames.length > 0 || polyMarkets.length > 0)) {
     await runAI(allGames, bets, polyMarkets, ANTHROPIC_KEY, webhooks);
     summary += " + AI picks";
+  }
+  var CONTENT_WEBHOOK = (process.env.WEBHOOK_CONTENT || "").trim();
+  if (CONTENT_WEBHOOK && ANTHROPIC_KEY && bets.length > 0) {
+    try {
+      var topBet = bets[0];
+      var topFmt = topBet.bookOdds > 0 ? "+" + topBet.bookOdds : "" + topBet.bookOdds;
+      var contentPrompt = "You are a social media manager for The Juice Report, a sports betting Discord that uses AI and Pinnacle sharp lines to find +EV bets.\n\n";
+      contentPrompt += "Today's scan found " + bets.length + " +EV bets across " + sportsScanned + " sports.\n";
+      contentPrompt += "Top pick: " + topBet.pick + " (" + topBet.game + ") at " + topBet.bookName + " " + topFmt + " with " + (topBet.ev * 100).toFixed(2) + "% EV\n\n";
+      contentPrompt += "Generate EXACTLY 3 social media posts. Label them TWITTER:, REDDIT_TITLE:, REDDIT_BODY:\n\n";
+      contentPrompt += "TWITTER rules:\n- Max 280 characters\n- Include the top pick with odds\n- Use 2-3 relevant hashtags\n- Sound confident but not salesy\n- Include a hook that makes people want to see more\n- End with: Join free: discord.gg/YOURLINK\n\n";
+      contentPrompt += "REDDIT_TITLE rules:\n- For r/sportsbetting\n- Compelling title that doesn't sound like spam\n- Include today's record or number of plays found\n\n";
+      contentPrompt += "REDDIT_BODY rules:\n- Start with today's top 3 picks with reasoning\n- Include your methodology (Pinnacle de-vig, +EV)\n- Be genuine and helpful, not salesy\n- End with: 'I post these daily in my free Discord if anyone wants the full list'\n- Don't include a link (Reddit flags those)\n\n";
+      contentPrompt += "Make each post sound natural, like a real bettor sharing picks — not a marketing bot.";
+      var contentRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: contentPrompt }] })
+      });
+      if (contentRes.ok) {
+        var contentData = await contentRes.json();
+        var contentText = "";
+        for (var ci = 0; ci < contentData.content.length; ci++) {
+          if (contentData.content[ci].type === "text") contentText += contentData.content[ci].text;
+        }
+        if (contentText) {
+          var parts = contentText.split(/(?=TWITTER:|REDDIT_TITLE:|REDDIT_BODY:)/);
+          var twitterPost = "";
+          var redditTitle = "";
+          var redditBody = "";
+          for (var pi = 0; pi < parts.length; pi++) {
+            if (parts[pi].indexOf("TWITTER:") === 0) twitterPost = parts[pi].replace("TWITTER:", "").trim();
+            if (parts[pi].indexOf("REDDIT_TITLE:") === 0) redditTitle = parts[pi].replace("REDDIT_TITLE:", "").trim();
+            if (parts[pi].indexOf("REDDIT_BODY:") === 0) redditBody = parts[pi].replace("REDDIT_BODY:", "").trim();
+          }
+          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# Twitter Post\nCopy and paste this to Twitter:\n```\n" + twitterPost + "\n```" }) });
+          await new Promise(function(r) { setTimeout(r, 500); });
+          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# Reddit Post\n**Title (paste as post title):**\n```\n" + redditTitle + "\n```\n**Body (paste as post body):**\n```\n" + redditBody + "\n```" }) });
+          await new Promise(function(r) { setTimeout(r, 500); });
+          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# TikTok Script\nNarrate this over a screen recording of the Discord picks:\n```\nMy AI just scanned " + sportsScanned + " sports and found " + bets.length + " positive EV bets. The top play is " + topBet.pick + " at " + topBet.bookName + " " + topFmt + " — that is a " + (topBet.ev * 100).toFixed(1) + " percent edge over the sharp line. The math does not lie. Link in bio for the free Discord.\n```" }) });
+          summary += " + content generated";
+        }
+      }
+    } catch (e) { summary += " + content error: " + e.message; }
   }
   try {
     var todayKey = new Date().toISOString().slice(0, 10);
