@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flag Picks — The Juice Report</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #08080c; color: #e0e0e0; font-family: 'JetBrains Mono', monospace; padding: 16px; max-width: 600px; margin: 0 auto; min-height: 100vh; }
+.header { text-align: center; margin-bottom: 24px; padding-top: 12px; }
+.header h1 { font-size: 28px; font-weight: 800; color: #FF8C00; }
+.header p { font-size: 11px; color: #555; margin-top: 4px; letter-spacing: 2px; }
+.date-nav { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
+.date-nav button { background: #1a1a25; color: #FF8C00; border: 1px solid #2a2a3a; border-radius: 8px; padding: 8px 16px; cursor: pointer; font-family: inherit; font-size: 14px; }
+.date-nav button:active { background: #2a2a3a; }
+.date-display { background: #1a1a25; border: 1px solid #2a2a3a; border-radius: 8px; padding: 8px 20px; font-size: 14px; color: #FF8C00; font-weight: 700; display: flex; align-items: center; }
+.stats { display: flex; justify-content: center; gap: 16px; margin-bottom: 24px; }
+.stat { text-align: center; }
+.stat-num { font-size: 20px; font-weight: 800; color: #333; }
+.stat-num.active { color: #27c93f; }
+.stat-label { font-size: 9px; color: #555; letter-spacing: 1px; }
+.section { margin-bottom: 24px; }
+.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.section-title { font-size: 14px; font-weight: 800; color: #FF8C00; }
+.section-count { font-size: 11px; color: #555; }
+.pick-card { background: #111118; border: 2px solid #1a1a22; border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s ease; display: flex; gap: 12px; align-items: center; }
+.pick-card.flagged { background: #111820; border-color: #27c93f; }
+.pick-card:active { opacity: 0.7; }
+.checkbox { width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0; background: #1a1a25; border: 2px solid #333; display: flex; align-items: center; justify-content: center; font-size: 16px; color: #fff; font-weight: 900; transition: all 0.15s ease; }
+.checkbox.checked { background: #27c93f; border-color: #27c93f; }
+.pick-sport { font-size: 13px; font-weight: 700; color: #888; }
+.pick-card.flagged .pick-sport { color: #FF8C00; }
+.pick-name { font-size: 15px; font-weight: 800; color: #aaa; margin-top: 4px; }
+.pick-card.flagged .pick-name { color: #fff; }
+.pick-game { font-size: 12px; color: #666; margin-top: 4px; }
+.pick-details { display: flex; gap: 12px; margin-top: 6px; font-size: 12px; }
+.pick-book { color: #FF8C00; }
+.pick-ev { color: #27c93f; }
+.pick-confidence { font-size: 12px; color: #666; margin-top: 4px; }
+.lock-name { font-size: 15px; font-weight: 800; color: #aaa; }
+.pick-card.flagged .lock-name { color: #FFD700; }
+.leg-name { font-size: 13px; font-weight: 700; color: #aaa; }
+.pick-card.flagged .leg-name { color: #fff; }
+.loading { text-align: center; color: #555; padding: 40px; }
+.error { text-align: center; color: #ff4444; padding: 40px; }
+.empty { text-align: center; color: #555; padding: 40px; font-size: 14px; }
+.footer { text-align: center; color: #333; font-size: 10px; margin-top: 32px; padding-bottom: 20px; letter-spacing: 2px; }
+.saving-overlay { position: fixed; top: 0; left: 0; right: 0; background: #27c93f; color: #000; text-align: center; padding: 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; z-index: 100; }
+</style>
+</head>
+<body>
+
+<div id="saving-bar" class="saving-overlay" style="display:none;">SAVING...</div>
+
+<div class="header">
+  <h1>🍊 FLAG PICKS</h1>
+  <p>TAP TO FLAG • ONLY FLAGGED PICKS GET GRADED</p>
+</div>
+
+<div class="date-nav">
+  <button onclick="changeDate(-1)">◀</button>
+  <div class="date-display" id="date-display"></div>
+  <button onclick="changeDate(1)">▶</button>
+</div>
+
+<div class="stats" id="stats"></div>
+<div id="content"><div class="loading">Loading picks...</div></div>
+<div class="footer">🍊 THE JUICE REPORT — SQUEEZE THE EDGE</div>
+
+<script>
+var API = "/.netlify/functions/flag-picks";
+var currentDate = new Date().toISOString().slice(0, 10);
+var data = null;
+
+function changeDate(delta) {
+  var d = new Date(currentDate + "T12:00:00");
+  d.setDate(d.getDate() + delta);
+  currentDate = d.toISOString().slice(0, 10);
+  document.getElementById("date-display").textContent = currentDate;
+  loadPicks();
+}
+
+function fmtOdds(o) { return o > 0 ? "+" + o : "" + o; }
+
+async function loadPicks() {
+  document.getElementById("content").innerHTML = '<div class="loading">Loading picks...</div>';
+  document.getElementById("stats").innerHTML = "";
+  try {
+    var res = await fetch(API + "?date=" + currentDate);
+    var json = await res.json();
+    if (json.error) {
+      document.getElementById("content").innerHTML = '<div class="error">' + json.error + '</div>';
+      data = null;
+      return;
+    }
+    data = json;
+    render();
+  } catch (e) {
+    document.getElementById("content").innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+async function toggle(category, index) {
+  if (!data) return;
+  var flaggedEV = data.flaggedEV || [];
+  var flaggedAI = data.flaggedAI || [];
+  var flaggedLock = data.flaggedLock || false;
+  var flaggedParlay = data.flaggedParlay || [];
+
+  var currentlyFlagged = false;
+  if (category === "ev") currentlyFlagged = flaggedEV.indexOf(index) >= 0;
+  else if (category === "ai") currentlyFlagged = flaggedAI.indexOf(index) >= 0;
+  else if (category === "lock") currentlyFlagged = flaggedLock;
+  else if (category === "parlay") currentlyFlagged = flaggedParlay.indexOf(index) >= 0;
+
+  document.getElementById("saving-bar").style.display = "block";
+
+  try {
+    var res = await fetch(API + "?date=" + currentDate, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: currentlyFlagged ? "unflag" : "flag", category: category, index: index })
+    });
+    var json = await res.json();
+    if (json.success) {
+      data.flaggedEV = json.flaggedEV;
+      data.flaggedAI = json.flaggedAI;
+      data.flaggedLock = json.flaggedLock;
+      data.flaggedParlay = json.flaggedParlay;
+      render();
+    }
+  } catch (e) { console.error(e); }
+
+  document.getElementById("saving-bar").style.display = "none";
+}
+
+function render() {
+  if (!data) return;
+  var flaggedEV = data.flaggedEV || [];
+  var flaggedAI = data.flaggedAI || [];
+  var flaggedLock = data.flaggedLock || false;
+  var flaggedParlay = data.flaggedParlay || [];
+  var bets = data.bets || [];
+  var aiPicks = data.aiPicks || [];
+  var lock = data.lock || null;
+  var parlayLegs = data.parlayLegs || [];
+
+  // Stats
+  var statsHTML = '';
+  statsHTML += '<div class="stat"><div class="stat-num ' + (flaggedEV.length > 0 ? 'active' : '') + '">' + flaggedEV.length + '</div><div class="stat-label">EV (' + bets.length + ')</div></div>';
+  statsHTML += '<div class="stat"><div class="stat-num ' + (flaggedAI.length > 0 ? 'active' : '') + '">' + flaggedAI.length + '</div><div class="stat-label">AI (' + aiPicks.length + ')</div></div>';
+  statsHTML += '<div class="stat"><div class="stat-num ' + (flaggedLock ? 'active' : '') + '">' + (flaggedLock ? 1 : 0) + '</div><div class="stat-label">LOCK (' + (lock ? 1 : 0) + ')</div></div>';
+  statsHTML += '<div class="stat"><div class="stat-num ' + (flaggedParlay.length > 0 ? 'active' : '') + '">' + flaggedParlay.length + '</div><div class="stat-label">PARLAY (' + parlayLegs.length + ')</div></div>';
+  document.getElementById("stats").innerHTML = statsHTML;
+
+  // Content
+  var html = '';
+
+  // EV plays
+  if (bets.length > 0) {
+    html += '<div class="section">';
+    html += '<div class="section-header"><div class="section-title">🎯 +EV PLAYS</div><div class="section-count">' + flaggedEV.length + '/' + bets.length + ' flagged</div></div>';
+    for (var i = 0; i < bets.length; i++) {
+      var b = bets[i];
+      var f = flaggedEV.indexOf(i) >= 0;
+      html += '<div class="pick-card ' + (f ? 'flagged' : '') + '" onclick="toggle(\'ev\',' + i + ')">';
+      html += '<div class="checkbox ' + (f ? 'checked' : '') + '">' + (f ? '✓' : '') + '</div>';
+      html += '<div style="flex:1">';
+      html += '<div class="pick-sport">' + b.sport + ' · ' + b.marketLabel + '</div>';
+      html += '<div class="pick-name">' + b.pick + '</div>';
+      html += '<div class="pick-game">' + b.game + '</div>';
+      html += '<div class="pick-details"><span class="pick-book">' + b.bookName + ' ' + fmtOdds(b.bookOdds) + '</span><span class="pick-ev">EV: ' + (b.ev * 100).toFixed(2) + '%</span></div>';
+      html += '</div></div>';
+    }
+    html += '</div>';
+  }
+
+  // AI picks
+  if (aiPicks.length > 0) {
+    html += '<div class="section">';
+    html += '<div class="section-header"><div class="section-title">🧠 AI BEST BETS</div><div class="section-count">' + flaggedAI.length + '/' + aiPicks.length + ' flagged</div></div>';
+    for (var i = 0; i < aiPicks.length; i++) {
+      var p = aiPicks[i];
+      var f = flaggedAI.indexOf(i) >= 0;
+      html += '<div class="pick-card ' + (f ? 'flagged' : '') + '" onclick="toggle(\'ai\',' + i + ')">';
+      html += '<div class="checkbox ' + (f ? 'checked' : '') + '">' + (f ? '✓' : '') + '</div>';
+      html += '<div style="flex:1">';
+      html += '<div class="pick-name">' + p.pick + '</div>';
+      html += '<div class="pick-confidence">' + (p.confidence || '') + '</div>';
+      html += '</div></div>';
+    }
+    html += '</div>';
+  }
+
+  // Lock
+  if (lock) {
+    html += '<div class="section">';
+    html += '<div class="section-header"><div class="section-title">🔒 LOCK OF THE DAY</div><div class="section-count">' + (flaggedLock ? '1/1' : '0/1') + ' flagged</div></div>';
+    html += '<div class="pick-card ' + (flaggedLock ? 'flagged' : '') + '" onclick="toggle(\'lock\',0)">';
+    html += '<div class="checkbox ' + (flaggedLock ? 'checked' : '') + '">' + (flaggedLock ? '✓' : '') + '</div>';
+    html += '<div style="flex:1"><div class="lock-name">' + lock + '</div></div>';
+    html += '</div></div>';
+  }
+
+  // Parlay legs
+  if (parlayLegs.length > 0) {
+    html += '<div class="section">';
+    html += '<div class="section-header"><div class="section-title">🎲 PARLAY LEGS</div><div class="section-count">' + flaggedParlay.length + '/' + parlayLegs.length + ' flagged</div></div>';
+    for (var i = 0; i < parlayLegs.length; i++) {
+      var f = flaggedParlay.indexOf(i) >= 0;
+      html += '<div class="pick-card ' + (f ? 'flagged' : '') + '" onclick="toggle(\'parlay\',' + i + ')">';
+      html += '<div class="checkbox ' + (f ? 'checked' : '') + '">' + (f ? '✓' : '') + '</div>';
+      html += '<div style="flex:1"><div class="leg-name">Leg ' + (i + 1) + ': ' + parlayLegs[i] + '</div></div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  if (bets.length === 0 && aiPicks.length === 0 && !lock) {
+    html = '<div class="empty">No picks saved for this date. Run the morning scan first.</div>';
+  }
+
+  document.getElementById("content").innerHTML = html;
+}
+
+// Init
+document.getElementById("date-display").textContent = currentDate;
+loadPicks();
+</script>
+</body>
+</html>
