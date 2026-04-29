@@ -27,6 +27,8 @@ var REGIONS = "us,eu";
 var GAME_MARKETS = "h2h,spreads,totals";
 var PROP_MARKETS = "player_pass_tds,player_pass_yds,player_rush_yds,player_receptions,player_reception_yds,player_points,player_rebounds,player_assists,player_threes,player_hits,player_total_bases,player_home_runs,player_pitcher_strikeouts,player_goals,player_shots_on_goal";
 var PROP_LABELS = {player_pass_tds:"Pass TDs",player_pass_yds:"Pass Yds",player_rush_yds:"Rush Yds",player_receptions:"Receptions",player_reception_yds:"Rec Yds",player_points:"Points",player_rebounds:"Rebounds",player_assists:"Assists",player_threes:"3PT",player_hits:"Hits",player_total_bases:"Total Bases",player_home_runs:"HRs",player_pitcher_strikeouts:"K's",player_goals:"Goals",player_shots_on_goal:"SOG"};
+function toET(d) { return new Date(d.toLocaleString("en-US", { timeZone: "America/New_York" })); }
+function etDateStr(d) { var e = toET(d); return e.getFullYear() + "-" + String(e.getMonth() + 1).padStart(2, "0") + "-" + String(e.getDate()).padStart(2, "0"); }
 function toDecimal(o) { return o > 0 ? o / 100 + 1 : 100 / Math.abs(o) + 1; }
 function toImplied(o) { return o > 0 ? 100 / (o + 100) : Math.abs(o) / (Math.abs(o) + 100); }
 function fmtOdds(o) { return o > 0 ? "+" + o : "" + o; }
@@ -172,7 +174,7 @@ async function post(webhook, content, embeds) {
   await new Promise(function(r) { setTimeout(r, 600); });
 }
 async function sendEVPlays(webhook, bets, bankroll) {
-  var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
   var avgEV = 0; var totalExpProfit = 0; var totalKellyRisk = 0;
   for (var i = 0; i < bets.length; i++) {
     avgEV += bets[i].ev;
@@ -252,7 +254,7 @@ async function sendAItoChannel(webhook, aiText, title, footerText) {
   }
 }
 async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
-  var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  var today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
   var gameList = ""; var seen = {};
   for (var i = 0; i < games.length; i++) {
     var g = games[i]; var gk = g.sport + "|" + g.away + "|" + g.home;
@@ -363,10 +365,10 @@ export async function handler(event) {
     } catch (e) { errors.push(sport.label + ":ERR"); continue; }
     if (!events || !events.length) continue;
     var now = new Date();
-    var todayStr = now.toISOString().slice(0, 10);
+    var todayStr = etDateStr(now);
     events = events.filter(function(ev) {
       var gameTime = new Date(ev.commence_time);
-      var gameDate = ev.commence_time.slice(0, 10);
+      var gameDate = etDateStr(gameTime);
       if (gameDate !== todayStr) return false;
       if (gameTime < now) return false;
       return true;
@@ -447,7 +449,7 @@ export async function handler(event) {
     } catch (e) { summary += " + content error: " + e.message; }
   }
   try {
-    var todayKey = new Date().toISOString().slice(0, 10);
+    var todayKey = etDateStr(new Date());
     var picksToSave = [];
     for (var i = 0; i < Math.min(bets.length, 30); i++) {
       picksToSave.push({ sport: bets[i].sport, pick: bets[i].pick, game: bets[i].game, bookName: bets[i].bookName, bookOdds: bets[i].bookOdds, sharpOdds: bets[i].sharpOdds, ev: bets[i].ev, edge: bets[i].edge, type: bets[i].type, marketLabel: bets[i].marketLabel });
