@@ -112,6 +112,58 @@ async function fetchPolymarketSports() {
   }
   return markets;
 }
+function parseAIPicks(aiText) {
+  var picks = [];
+  var lines = aiText.split("\n");
+  var currentPick = null;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.replace(/\*\*/g, "").indexOf("PICK:") === 0) {
+      if (currentPick) picks.push(currentPick);
+      currentPick = { pick: line.replace(/\*\*/g, "").replace("PICK:", "").trim(), confidence: "", why: "" };
+    } else if (currentPick && line.replace(/\*\*/g, "").indexOf("CONFIDENCE:") === 0) {
+      currentPick.confidence = line.replace(/\*\*/g, "").replace("CONFIDENCE:", "").trim();
+    } else if (currentPick && line.replace(/\*\*/g, "").indexOf("WHY:") === 0) {
+      currentPick.why = line.replace(/\*\*/g, "").replace("WHY:", "").trim();
+    }
+  }
+  if (currentPick) picks.push(currentPick);
+  return picks;
+}
+function parseParlayAndLock(parlayText) {
+  var result = { lock: null, parlayLegs: [] };
+  var lines = parlayText.split("\n");
+  var inParlay = false;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    var clean = line.replace(/\*\*/g, "");
+    var lower = clean.toLowerCase();
+    if (lower.indexOf("lock of the day") >= 0) {
+      var lockText = clean.replace(/lock of the day:?/i, "").trim();
+      if (lockText.length > 3) {
+        result.lock = lockText;
+      } else if (i + 1 < lines.length) {
+        result.lock = lines[i + 1].replace(/\*\*/g, "").replace(/^[-•]\s*/, "").trim();
+      }
+    }
+    if (lower.indexOf("parlay of the day") >= 0 || lower.indexOf("parlay:") >= 0) {
+      inParlay = true;
+      continue;
+    }
+    if (inParlay) {
+      if (clean.indexOf("---") >= 0 || lower.indexOf("lock") >= 0) {
+        if (result.parlayLegs.length > 0) inParlay = false;
+        continue;
+      }
+      if (clean === "") continue;
+      var legText = clean.replace(/^[-•*]\s*/, "").replace(/^(Leg\s*\d+:?\s*)/i, "").replace(/^(\d+[\.\)]\s*)/, "").trim();
+      if (legText.length > 5 && legText.length < 200 && lower.indexOf("combined") < 0 && lower.indexOf("total odds") < 0 && lower.indexOf("parlay odds") < 0) {
+        result.parlayLegs.push(legText);
+      }
+    }
+  }
+  return result;
+}
 async function post(webhook, content, embeds) {
   var payload = { username: "+EV Finder" };
   if (content) payload.content = content;
@@ -223,11 +275,13 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
       polyInfo += " (vol: $" + Math.round(m.volume || 0) + ")\n";
     }
   }
+  var savedAIPicks = [];
+  var savedLockParlay = { lock: null, parlayLegs: [] };
   var sportsPrompt = "You are an elite sports betting analyst. Today is " + today + ".\n\n";
-  sportsPrompt += "=== TODAY'S GAMES ===\n" + gameList + "\n";
-  if (evSummary) { sportsPrompt += "=== +EV OPPORTUNITIES ===\n" + evSummary + "\n"; }
-  sportsPrompt += "Give me your TOP 5 SPORTSBOOK BEST BETS OF THE DAY.\nFor each: pick (team, ML/spread/total/prop, odds), confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences reasoning (form, matchups, splits, rest, injuries, situations). Note +EV alignment.\n\n";
-  sportsPrompt += "Format:\nPICK: [pick]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\nBe bold and specific.";
+  sportsPrompt += "=== TODAY'S GAMES WITH REAL ODDS FROM THE API ===\n" + gameList + "\n";
+  if (evSummary) { sportsPrompt += "=== +EV OPPORTUNITIES (REAL ODDS FROM SPORTSBOOKS) ===\n" + evSummary + "\n"; }
+  sportsPrompt += "Give me your TOP 5 SPORTSBOOK BEST BETS OF THE DAY.\nYou can pick ANY game on today's slate — your picks do NOT have to come from the +EV section. Use your own analysis of matchups, form, injuries, and situations to find the best plays.\n\nCRITICAL ODDS RULES:\n1. If your pick matches a game in the +EV section above, use the EXACT odds shown there. Do not change them.\n2. If your pick is a game NOT in the +EV section, use the ML odds shown in the games list above. Those are real.\n3. Plus (+) = UNDERDOG. Minus (-) = FAVORITE. NEVER flip this. Double check before posting.\n4. If you cannot find real odds for a pick in any of the data above, say 'check book for current line' — do NOT invent a number.\n5. Before finalizing each pick, verify: does the + or - sign match who is actually favored? If a team is clearly the better team, they should be minus. If they are the underdog, they should be plus.\n\nFor each: pick (team, ML/spread/total/prop, odds), confidence (🔥🔥🔥/🔥🔥/🔥), 2-3 sentences reasoning (form, matchups, splits, rest, injuries, situations). Note if it aligns with a +EV opportunity.\n\n";
+  sportsPrompt += "Format:\nPICK: [pick with odds]\nCONFIDENCE: [emojis]\nWHY: [reasoning]\n\nBe bold and specific.";
   try {
     await post(webhooks.aiPicks, "🧠 Generating sportsbook analysis...", null);
     var aiRes = await fetch("https://api.anthropic.com/v1/messages", {
@@ -238,7 +292,10 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
     if (aiRes.ok) {
       var aiData = await aiRes.json(); var aiText = "";
       for (var i = 0; i < aiData.content.length; i++) { if (aiData.content[i].type === "text") aiText += aiData.content[i].text; }
-      if (aiText) await sendAItoChannel(webhooks.aiPicks, aiText, "# 🧠 AI Sportsbook Best Bets", SLOGAN + " | Powered by Claude AI | Not financial advice");
+      if (aiText) {
+        await sendAItoChannel(webhooks.aiPicks, aiText, "# 🧠 AI Sportsbook Best Bets", SLOGAN + " | Powered by Claude AI | Not financial advice");
+        savedAIPicks = parseAIPicks(aiText);
+      }
     } else { var err = await aiRes.text(); await post(webhooks.aiPicks, "⚠️ AI error: HTTP " + aiRes.status + " — " + err.substring(0, 200), null); }
   } catch (e) { await post(webhooks.aiPicks, "⚠️ AI error: " + e.message, null); }
   if (polyInfo && webhooks.polymarket) {
@@ -262,10 +319,10 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
     } catch (e) { await post(webhooks.polymarket, "⚠️ Polymarket AI error: " + e.message, null); }
   }
   var parlayPrompt = "You are an elite sports betting analyst. Today is " + today + ".\n\n";
-  parlayPrompt += "Games today:\n" + gameList + "\n";
-  if (evSummary) { parlayPrompt += "+EV opportunities:\n" + evSummary + "\n"; }
+  parlayPrompt += "=== TODAY'S GAMES WITH REAL ODDS ===\n" + gameList + "\n";
+  if (evSummary) { parlayPrompt += "=== +EV OPPORTUNITIES (REAL ODDS) ===\n" + evSummary + "\n"; }
   if (polyInfo) { parlayPrompt += "Polymarket odds:\n" + polyInfo + "\n"; }
-  parlayPrompt += "Give me:\n1. A brief 3-4 sentence DAILY SUMMARY of today's betting landscape\n2. Your PARLAY OF THE DAY (3-4 legs) with reasoning for each leg and the combined odds estimate\n3. A LOCK OF THE DAY — your single highest confidence play with a short explanation\n\nKeep it punchy and confident.";
+  parlayPrompt += "CRITICAL: ONLY use odds from the data above. Plus (+) means UNDERDOG. Minus (-) means FAVORITE. Do NOT flip or invent odds. Double check each pick — if a team is the better team they should be MINUS not PLUS. If you don't have the exact line, say 'check your book.'\n\nGive me:\n1. A brief 3-4 sentence DAILY SUMMARY of today's betting landscape\n2. Your PARLAY OF THE DAY (3-4 legs) with reasoning for each leg. List each leg clearly on its own line starting with a dash.\n3. A LOCK OF THE DAY — your single highest confidence play. State it clearly after 'LOCK OF THE DAY:'\n\nKeep it punchy and confident.";
   try {
     var parlayRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -275,9 +332,13 @@ async function runAI(games, bets, polyMarkets, anthropicKey, webhooks) {
     if (parlayRes.ok) {
       var parlayData = await parlayRes.json(); var parlayText = "";
       for (var i = 0; i < parlayData.content.length; i++) { if (parlayData.content[i].type === "text") parlayText += parlayData.content[i].text; }
-      if (parlayText) await sendAItoChannel(webhooks.announcements, parlayText, "# 📢 Daily Summary & Parlay of the Day", SLOGAN + " | Daily briefing by Claude AI | Gamble responsibly");
+      if (parlayText) {
+        await sendAItoChannel(webhooks.announcements, parlayText, "# 📢 Daily Summary & Parlay of the Day", SLOGAN + " | Daily briefing by Claude AI | Gamble responsibly");
+        savedLockParlay = parseParlayAndLock(parlayText);
+      }
     }
   } catch (e) {}
+  return { aiPicks: savedAIPicks, lock: savedLockParlay.lock, parlayLegs: savedLockParlay.parlayLegs };
 }
 export async function handler(event) {
   var ODDS_API_KEY = (process.env.ODDS_API_KEY || "").trim();
@@ -347,23 +408,19 @@ export async function handler(event) {
   if (bets.length && webhooks.evPlays) { await sendEVPlays(webhooks.evPlays, bets, BANKROLL); }
   else if (webhooks.evPlays) { await post(webhooks.evPlays, "📭 **No +EV bets found.** " + sportsScanned + " sports. ~" + creditsUsed + " credits.", null); }
   if (bets.length && webhooks.backtest) { await sendBacktest(webhooks.backtest, bets, BANKROLL); }
+  var aiResult = { aiPicks: [], lock: null, parlayLegs: [] };
   if (ANTHROPIC_KEY && (allGames.length > 0 || polyMarkets.length > 0)) {
-    await runAI(allGames, bets, polyMarkets, ANTHROPIC_KEY, webhooks);
-    summary += " + AI picks";
+    aiResult = await runAI(allGames, bets, polyMarkets, ANTHROPIC_KEY, webhooks);
+    summary += " + AI picks (" + aiResult.aiPicks.length + " parsed)";
+    if (aiResult.lock) summary += " + lock";
+    if (aiResult.parlayLegs.length) summary += " + " + aiResult.parlayLegs.length + " parlay legs";
   }
   var CONTENT_WEBHOOK = (process.env.WEBHOOK_CONTENT || "").trim();
   if (CONTENT_WEBHOOK && ANTHROPIC_KEY && bets.length > 0) {
     try {
       var topBet = bets[0];
       var topFmt = topBet.bookOdds > 0 ? "+" + topBet.bookOdds : "" + topBet.bookOdds;
-      var contentPrompt = "You are a social media manager for The Juice Report, a sports betting Discord that uses AI and Pinnacle sharp lines to find +EV bets.\n\n";
-      contentPrompt += "Today's scan found " + bets.length + " +EV bets across " + sportsScanned + " sports.\n";
-      contentPrompt += "Top pick: " + topBet.pick + " (" + topBet.game + ") at " + topBet.bookName + " " + topFmt + " with " + (topBet.ev * 100).toFixed(2) + "% EV\n\n";
-      contentPrompt += "Generate EXACTLY 3 social media posts. Label them TWITTER:, REDDIT_TITLE:, REDDIT_BODY:\n\n";
-      contentPrompt += "TWITTER rules:\n- Max 280 characters\n- Include the top pick with odds\n- Use 2-3 relevant hashtags\n- Sound confident but not salesy\n- Include a hook that makes people want to see more\n- End with: Join free: discord.gg/YOURLINK\n\n";
-      contentPrompt += "REDDIT_TITLE rules:\n- For r/sportsbetting\n- Compelling title that doesn't sound like spam\n- Include today's record or number of plays found\n\n";
-      contentPrompt += "REDDIT_BODY rules:\n- Start with today's top 3 picks with reasoning\n- Include your methodology (Pinnacle de-vig, +EV)\n- Be genuine and helpful, not salesy\n- End with: 'I post these daily in my free Discord if anyone wants the full list'\n- Don't include a link (Reddit flags those)\n\n";
-      contentPrompt += "Make each post sound natural, like a real bettor sharing picks — not a marketing bot.";
+      var contentPrompt = "You are a social media manager for The Juice Report, a sports betting Discord that uses AI and Pinnacle sharp lines to find +EV bets.\n\nToday's scan found " + bets.length + " +EV bets across " + sportsScanned + " sports.\nTop pick: " + topBet.pick + " (" + topBet.game + ") at " + topBet.bookName + " " + topFmt + " with " + (topBet.ev * 100).toFixed(2) + "% EV\n\nGenerate EXACTLY 3 social media posts. Label them TWITTER:, REDDIT_TITLE:, REDDIT_BODY:\n\nTWITTER rules: Max 280 chars, include top pick with odds, 2-3 hashtags, confident not salesy, end with: Join free: discord.gg/YOURLINK\n\nREDDIT_TITLE: For r/sportsbetting, compelling, not spam\n\nREDDIT_BODY: Top 3 picks with reasoning, include methodology, genuine, end with 'I post these daily in my free Discord', no link\n\nSound natural.";
       var contentRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
@@ -372,24 +429,20 @@ export async function handler(event) {
       if (contentRes.ok) {
         var contentData = await contentRes.json();
         var contentText = "";
-        for (var ci = 0; ci < contentData.content.length; ci++) {
-          if (contentData.content[ci].type === "text") contentText += contentData.content[ci].text;
-        }
+        for (var ci = 0; ci < contentData.content.length; ci++) { if (contentData.content[ci].type === "text") contentText += contentData.content[ci].text; }
         if (contentText) {
           var parts = contentText.split(/(?=TWITTER:|REDDIT_TITLE:|REDDIT_BODY:)/);
-          var twitterPost = "";
-          var redditTitle = "";
-          var redditBody = "";
+          var twitterPost = ""; var redditTitle = ""; var redditBody = "";
           for (var pi = 0; pi < parts.length; pi++) {
             if (parts[pi].indexOf("TWITTER:") === 0) twitterPost = parts[pi].replace("TWITTER:", "").trim();
             if (parts[pi].indexOf("REDDIT_TITLE:") === 0) redditTitle = parts[pi].replace("REDDIT_TITLE:", "").trim();
             if (parts[pi].indexOf("REDDIT_BODY:") === 0) redditBody = parts[pi].replace("REDDIT_BODY:", "").trim();
           }
-          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# Twitter Post\nCopy and paste this to Twitter:\n```\n" + twitterPost + "\n```" }) });
+          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# Twitter Post\n```\n" + twitterPost + "\n```" }) });
           await new Promise(function(r) { setTimeout(r, 500); });
-          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# Reddit Post\n**Title (paste as post title):**\n```\n" + redditTitle + "\n```\n**Body (paste as post body):**\n```\n" + redditBody + "\n```" }) });
+          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# Reddit Post\n**Title:**\n```\n" + redditTitle + "\n```\n**Body:**\n```\n" + redditBody + "\n```" }) });
           await new Promise(function(r) { setTimeout(r, 500); });
-          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# TikTok Script\nNarrate this over a screen recording of the Discord picks:\n```\nMy AI just scanned " + sportsScanned + " sports and found " + bets.length + " positive EV bets. The top play is " + topBet.pick + " at " + topBet.bookName + " " + topFmt + " — that is a " + (topBet.ev * 100).toFixed(1) + " percent edge over the sharp line. The math does not lie. Link in bio for the free Discord.\n```" }) });
+          await fetch(CONTENT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "Content Bot", content: "# TikTok Script\n```\nMy AI just scanned " + sportsScanned + " sports and found " + bets.length + " positive EV bets. The top play is " + topBet.pick + " at " + topBet.bookName + " " + topFmt + " — that is a " + (topBet.ev * 100).toFixed(1) + " percent edge over the sharp line. The math does not lie. Link in bio for the free Discord.\n```" }) });
           summary += " + content generated";
         }
       }
@@ -407,12 +460,25 @@ export async function handler(event) {
       var gk = allGames[i].away + "@" + allGames[i].home;
       if (!seenGames[gk]) { seenGames[gk] = true; gamesList.push(allGames[i]); }
     }
+    var saveData = {
+      date: todayKey,
+      bets: picksToSave,
+      aiPicks: aiResult.aiPicks,
+      lock: aiResult.lock,
+      parlayLegs: aiResult.parlayLegs,
+      games: gamesList,
+      betCount: bets.length,
+      aiPickCount: aiResult.aiPicks.length,
+      parlayLegCount: aiResult.parlayLegs.length,
+      sportsCount: sportsScanned,
+      credits: creditsUsed
+    };
     await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date: todayKey, bets: picksToSave, games: gamesList, betCount: bets.length, sportsCount: sportsScanned, credits: creditsUsed })
+      body: JSON.stringify(saveData)
     });
-    summary += " | picks saved";
+    summary += " | saved (EV:" + picksToSave.length + " AI:" + aiResult.aiPicks.length + " Lock:" + (aiResult.lock ? "1" : "0") + " Parlay:" + aiResult.parlayLegs.length + ")";
   } catch (e) { summary += " | save error: " + e.message; }
   return { statusCode: 200, body: summary };
 }
