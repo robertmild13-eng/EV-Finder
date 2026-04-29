@@ -16,7 +16,7 @@ export async function handler(event) {
   var savedPicks = null;
   var picksDate = todayKey;
   try {
-    var pickRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + todayKey);
+    var pickRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/flag-picks?date=" + todayKey);
     if (pickRes.ok) {
       var pickText = await pickRes.text();
       if (pickText && pickText.indexOf("{") === 0) { savedPicks = JSON.parse(pickText); }
@@ -25,13 +25,21 @@ export async function handler(event) {
   if (!savedPicks || !savedPicks.bets) {
     picksDate = yesterdayKey;
     try {
-      var pickRes2 = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + yesterdayKey);
+      var pickRes2 = await fetch("https://evfindermurray.netlify.app/.netlify/functions/flag-picks?date=" + yesterdayKey);
       if (pickRes2.ok) {
         var pickText2 = await pickRes2.text();
         if (pickText2 && pickText2.indexOf("{") === 0) { savedPicks = JSON.parse(pickText2); }
       }
     } catch(e) {}
   }
+
+  // Get flagged picks only
+  var flaggedEV = savedPicks && savedPicks.flaggedEV ? savedPicks.flaggedEV : [];
+  var flaggedAI = savedPicks && savedPicks.flaggedAI ? savedPicks.flaggedAI : [];
+  var flaggedLock = savedPicks && savedPicks.flaggedLock ? savedPicks.flaggedLock : false;
+  var flaggedParlay = savedPicks && savedPicks.flaggedParlay ? savedPicks.flaggedParlay : [];
+
+  var hasFlagged = flaggedEV.length > 0 || flaggedAI.length > 0 || flaggedLock || flaggedParlay.length > 0;
 
   // Fetch completed game scores
   var completedGames = [];
@@ -95,65 +103,96 @@ export async function handler(event) {
     }
   }
 
-  // Build EV picks info
+  // Build FLAGGED EV picks info
   var evPicksInfo = "";
-  if (savedPicks && savedPicks.bets && savedPicks.bets.length) {
-    evPicksInfo = "=== EV SCANNER PICKS (from " + picksDate + ") ===\n";
-    for (var i = 0; i < savedPicks.bets.length; i++) {
-      var b = savedPicks.bets[i];
-      var fmtOdds = b.bookOdds > 0 ? "+" + b.bookOdds : "" + b.bookOdds;
-      evPicksInfo += (i + 1) + ". " + b.sport + " | " + b.pick + " | " + b.game + " | " + b.bookName + " " + fmtOdds + " | Type: " + b.marketLabel + "\n";
+  if (savedPicks && savedPicks.bets && flaggedEV.length > 0) {
+    evPicksInfo = "=== FLAGGED EV SCANNER PICKS (from " + picksDate + ") ===\n";
+    for (var i = 0; i < flaggedEV.length; i++) {
+      var idx = flaggedEV[i];
+      if (idx < savedPicks.bets.length) {
+        var b = savedPicks.bets[idx];
+        var fmtOdds = b.bookOdds > 0 ? "+" + b.bookOdds : "" + b.bookOdds;
+        evPicksInfo += (i + 1) + ". " + b.sport + " | " + b.pick + " | " + b.game + " | " + b.bookName + " " + fmtOdds + " | Type: " + b.marketLabel + "\n";
+      }
     }
     evPicksInfo += "\n";
   }
 
-  // Build AI picks info
+  // Build FLAGGED AI picks info
   var aiPicksInfo = "";
-  if (savedPicks && savedPicks.aiPicks && savedPicks.aiPicks.length) {
-    aiPicksInfo = "=== AI BEST BETS (from " + picksDate + ") ===\n";
-    for (var i = 0; i < savedPicks.aiPicks.length; i++) {
-      aiPicksInfo += (i + 1) + ". " + savedPicks.aiPicks[i].pick + "\n";
+  if (savedPicks && savedPicks.aiPicks && flaggedAI.length > 0) {
+    aiPicksInfo = "=== FLAGGED AI BEST BETS (from " + picksDate + ") ===\n";
+    for (var i = 0; i < flaggedAI.length; i++) {
+      var idx = flaggedAI[i];
+      if (idx < savedPicks.aiPicks.length) {
+        aiPicksInfo += (i + 1) + ". " + savedPicks.aiPicks[idx].pick + "\n";
+      }
     }
     aiPicksInfo += "\n";
   }
 
-  // Build Lock & Parlay info
+  // Build FLAGGED Lock & Parlay info
   var lockParlayInfo = "";
-  if (savedPicks && (savedPicks.lock || (savedPicks.parlayLegs && savedPicks.parlayLegs.length))) {
-    lockParlayInfo = "=== LOCK & PARLAY PICKS (from " + picksDate + ") ===\n";
-    if (savedPicks.lock) { lockParlayInfo += "LOCK OF THE DAY: " + savedPicks.lock + "\n"; }
-    if (savedPicks.parlayLegs && savedPicks.parlayLegs.length) {
-      lockParlayInfo += "PARLAY LEGS:\n";
-      for (var i = 0; i < savedPicks.parlayLegs.length; i++) {
-        lockParlayInfo += "  Leg " + (i + 1) + ": " + savedPicks.parlayLegs[i] + "\n";
+  if (flaggedLock && savedPicks && savedPicks.lock) {
+    lockParlayInfo += "=== FLAGGED LOCK OF THE DAY (from " + picksDate + ") ===\n";
+    lockParlayInfo += "LOCK: " + savedPicks.lock + "\n\n";
+  }
+  if (savedPicks && savedPicks.parlayLegs && flaggedParlay.length > 0) {
+    lockParlayInfo += "=== FLAGGED PARLAY LEGS (from " + picksDate + ") ===\n";
+    for (var i = 0; i < flaggedParlay.length; i++) {
+      var idx = flaggedParlay[i];
+      if (idx < savedPicks.parlayLegs.length) {
+        lockParlayInfo += "Leg " + (i + 1) + ": " + savedPicks.parlayLegs[idx] + "\n";
       }
     }
     lockParlayInfo += "\n";
   }
 
-  var prompt = "You are the official record keeper for The Juice Report sports betting Discord. Today is " + today + " (Eastern Time). Use this EXACT date.\n\n";
+  if (!hasFlagged) {
+    await fetch(DISCORD_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "The Juice Report", content: "⚠️ **No picks flagged for today.** Go to the flag page and select which picks you used before running results.\nhttps://evfindermurray.netlify.app/.netlify/functions/flag-picks?date=" + picksDate })
+    });
+    return { statusCode: 200, body: "No flagged picks. Flag them first." };
+  }
+
+  var prompt = "You are the official record keeper for The Juice Report sports betting Discord. Today is " + today + " (Eastern Time).\n\n";
   prompt += gamesInfo;
   prompt += evPicksInfo;
   prompt += aiPicksInfo;
   prompt += lockParlayInfo;
   prompt += "\nCRITICAL GRADING RULES:\n";
   prompt += "1. Scores and winners above are from the official API. Do NOT change them. Higher score = winner.\n";
-  prompt += "2. Grade EACH pick in ALL THREE categories separately.\n";
+  prompt += "2. ONLY grade the FLAGGED picks listed above. These are the picks we actually used.\n";
   prompt += "3. ML picks: WIN if the team we picked won the game. LOSS if they lost.\n";
   prompt += "4. Spread picks: WIN if the team covered the spread. LOSS if they didn't.\n";
   prompt += "5. Total (Over/Under) picks: WIN if the combined score went over/under the line. LOSS if not.\n";
   prompt += "6. If you cannot determine the result (player props, games not played yet), mark as PENDING.\n";
-  prompt += "7. For parlay legs, grade EACH LEG individually as WIN or LOSS — do NOT grade the parlay as a whole.\n";
-  prompt += "8. If no saved picks exist for a category, skip that section.\n\n";
+  prompt += "7. For parlay legs, grade EACH LEG individually as WIN or LOSS.\n\n";
   prompt += "FORMAT YOUR REPORT EXACTLY LIKE THIS:\n\n";
   prompt += "Start with: DAILY RESULTS — [today's date]\n";
   prompt += "Then a line of dashes: ---\n\n";
-  prompt += "SECTION 1: SCOREBOARD\nList completed games by sport: [Away] [score] @ [Home] [score] — W: [winner]\n\n";
-  prompt += "SECTION 2: +EV PLAYS GRADING\nGrade each EV scanner pick. Show: [pick] — [result emoji WIN/LOSS/PENDING]\nEnd with: Today: X-Y | (win rate %)\n\n";
-  prompt += "SECTION 3: AI BEST BETS GRADING\nGrade each AI pick. Show: [pick] — [result emoji WIN/LOSS/PENDING]\nEnd with: Today: X-Y | (win rate %)\n\n";
-  prompt += "SECTION 4: LOCK & PARLAY GRADING\nGrade the lock: [lock pick] — [WIN/LOSS]\nGrade EACH parlay leg individually: [leg] — [WIN/LOSS]\nEnd with: Lock: X-Y | Parlay Legs: X-Y\n\n";
-  prompt += "SECTION 5: OVERALL DASHBOARD\nShow all records in a clean summary:\n+EV Plays: X-Y (win %)\nAI Picks: X-Y (win %)\nLock: X-Y (win %)\nParlay Legs: X-Y (win %)\n\n";
-  prompt += "SECTION 6: KEY TAKEAWAYS\n3-5 sharp one-line observations about today's results.\n\n";
+  prompt += "SECTION 1: SCOREBOARD\nList completed games by sport: [Away] [score] @ [Home] [score] — W: [winner]\nOnly include games relevant to our flagged picks.\n\n";
+  if (evPicksInfo) {
+    prompt += "SECTION 2: +EV PLAYS GRADING\nGrade each flagged EV pick. Show: [pick] — [result emoji ✅/❌/⏳]\nEnd with: Today: X-Y | (win rate %)\n\n";
+  }
+  if (aiPicksInfo) {
+    prompt += "SECTION 3: AI BEST BETS GRADING\nGrade each flagged AI pick. Show: [pick] — [result emoji ✅/❌/⏳]\nEnd with: Today: X-Y | (win rate %)\n\n";
+  }
+  if (lockParlayInfo) {
+    prompt += "SECTION 4: LOCK & PARLAY GRADING\n";
+    if (flaggedLock) prompt += "Grade the lock: [lock pick] — [✅/❌]\n";
+    if (flaggedParlay.length) prompt += "Grade EACH parlay leg individually: [leg] — [✅/❌]\n";
+    prompt += "End with totals for each.\n\n";
+  }
+  prompt += "SECTION 5: OVERALL DASHBOARD\nShow all flagged records in a clean summary:\n";
+  if (evPicksInfo) prompt += "+EV Plays: X-Y (win %)\n";
+  if (aiPicksInfo) prompt += "AI Picks: X-Y (win %)\n";
+  if (flaggedLock) prompt += "Lock: X-Y (win %)\n";
+  if (flaggedParlay.length) prompt += "Parlay Legs: X-Y (win %)\n";
+  prompt += "\n";
+  prompt += "SECTION 6: KEY TAKEAWAYS\n2-4 sharp one-line observations about today's results.\n\n";
   prompt += "End with: The math doesn't lie. Trust the process.\n\n";
   prompt += "Use ** for bold. Use --- for dividers. Use ✅ for wins and ❌ for losses. Keep it concise for Discord.";
 
@@ -174,7 +213,6 @@ export async function handler(event) {
     }
     if (!aiText) return { statusCode: 200, body: "AI returned empty" };
 
-    // Split into Discord-safe chunks
     var chunks = [];
     while (aiText.length > 0) {
       if (aiText.length <= 1900) { chunks.push(aiText); break; }
@@ -184,7 +222,6 @@ export async function handler(event) {
       aiText = aiText.substring(cut);
     }
 
-    // Post header
     await fetch(DISCORD_WEBHOOK, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -192,7 +229,6 @@ export async function handler(event) {
     });
     await new Promise(function(r) { setTimeout(r, 500); });
 
-    // Post each chunk as an embed
     for (var c = 0; c < chunks.length; c++) {
       await fetch(DISCORD_WEBHOOK, {
         method: "POST",
@@ -209,11 +245,7 @@ export async function handler(event) {
       if (c < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 500); });
     }
 
-    var evCount = savedPicks && savedPicks.bets ? savedPicks.bets.length : 0;
-    var aiCount = savedPicks && savedPicks.aiPicks ? savedPicks.aiPicks.length : 0;
-    var lockCount = savedPicks && savedPicks.lock ? 1 : 0;
-    var parlayCount = savedPicks && savedPicks.parlayLegs ? savedPicks.parlayLegs.length : 0;
-    return { statusCode: 200, body: "Results posted. " + completedGames.length + " games. Graded — EV:" + evCount + " AI:" + aiCount + " Lock:" + lockCount + " Parlay legs:" + parlayCount };
+    return { statusCode: 200, body: "Results posted. Flagged: EV:" + flaggedEV.length + " AI:" + flaggedAI.length + " Lock:" + (flaggedLock ? 1 : 0) + " Parlay:" + flaggedParlay.length };
   } catch (e) {
     return { statusCode: 200, body: "Error: " + e.message };
   }
