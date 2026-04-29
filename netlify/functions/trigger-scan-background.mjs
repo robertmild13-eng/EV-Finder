@@ -49,7 +49,7 @@ function extractEV(events, sportLabel, sportIcon, propsOnly) {
   for (var e = 0; e < events.length; e++) {
     var event = events[e];
     var game = event.away_team + " @ " + event.home_team;
-    var time = new Date(event.commence_time).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" });
+    var time = new Date(event.commence_time).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York", timeZoneName: "short" });
     var bmMap = {};
     if (event.bookmakers) { for (var b = 0; b < event.bookmakers.length; b++) { bmMap[event.bookmakers[b].key] = event.bookmakers[b]; } }
     var sharpKey = null;
@@ -364,12 +364,10 @@ export async function handler(event) {
     if (!events || !events.length) continue;
     var now = new Date();
     var todayStr = now.toISOString().slice(0, 10);
-    var tomorrowDate = new Date(now.getTime() + 86400000);
-    var tomorrowStr = tomorrowDate.toISOString().slice(0, 10);
     events = events.filter(function(ev) {
       var gameTime = new Date(ev.commence_time);
       var gameDate = ev.commence_time.slice(0, 10);
-      if (gameDate !== todayStr && gameDate !== tomorrowStr) return false;
+      if (gameDate !== todayStr) return false;
       if (gameTime < now) return false;
       return true;
     });
@@ -382,7 +380,7 @@ export async function handler(event) {
         for (var mi = 0; mi < ge.bookmakers[0].markets.length; mi++) { if (ge.bookmakers[0].markets[mi].key === "h2h") { ml = ge.bookmakers[0].markets[mi]; break; } }
         if (ml && ml.outcomes && ml.outcomes.length >= 2) { gameOdds = ge.away_team + " " + fmtOdds(ml.outcomes[0].price) + " / " + ge.home_team + " " + fmtOdds(ml.outcomes[1].price); }
       }
-      allGames.push({ sport: sport.label, icon: sport.icon, away: ge.away_team, home: ge.home_team, time: new Date(ge.commence_time).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" }), odds: gameOdds });
+      allGames.push({ sport: sport.label, icon: sport.icon, away: ge.away_team, home: ge.home_team, time: new Date(ge.commence_time).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York", timeZoneName: "short" }), odds: gameOdds });
     }
     allBets = allBets.concat(extractEV(events, sport.label, sport.icon, false));
     if (sport.props) {
