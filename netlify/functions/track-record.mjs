@@ -12,42 +12,26 @@ export async function handler(event) {
   var yesterdayDate = new Date(now.getTime() - 86400000);
   var yesterdayKey = yesterdayDate.toISOString().slice(0, 10);
 
-  // Load yesterday's saved picks
+  // Load saved picks (try today first, then yesterday)
   var savedPicks = null;
+  var picksDate = todayKey;
   try {
-    var pickRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + yesterdayKey);
+    var pickRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + todayKey);
     if (pickRes.ok) {
       var pickText = await pickRes.text();
-      if (pickText && pickText.indexOf("{") === 0) {
-        savedPicks = JSON.parse(pickText);
-      }
+      if (pickText && pickText.indexOf("{") === 0) { savedPicks = JSON.parse(pickText); }
     }
   } catch(e) {}
-
-  // Also try today's picks if yesterday has none
   if (!savedPicks || !savedPicks.bets) {
+    picksDate = yesterdayKey;
     try {
-      var pickRes2 = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + todayKey);
+      var pickRes2 = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=" + yesterdayKey);
       if (pickRes2.ok) {
         var pickText2 = await pickRes2.text();
-        if (pickText2 && pickText2.indexOf("{") === 0) {
-          savedPicks = JSON.parse(pickText2);
-        }
+        if (pickText2 && pickText2.indexOf("{") === 0) { savedPicks = JSON.parse(pickText2); }
       }
     } catch(e) {}
   }
-
-  // Load history
-  var history = {};
-  try {
-    var histRes = await fetch("https://evfindermurray.netlify.app/.netlify/functions/picks-db?date=history");
-    if (histRes.ok) {
-      var histText = await histRes.text();
-      if (histText && histText.indexOf("{") === 0) {
-        history = JSON.parse(histText);
-      }
-    }
-  } catch(e) {}
 
   // Fetch completed game scores
   var completedGames = [];
@@ -59,8 +43,11 @@ export async function handler(event) {
     { key: "soccer_epl", label: "EPL" },
     { key: "soccer_usa_mls", label: "MLS" },
     { key: "soccer_spain_la_liga", label: "La Liga" },
+    { key: "americanfootball_ufl", label: "UFL" },
+    { key: "tennis_atp_madrid_open", label: "ATP Madrid" },
+    { key: "tennis_wta_madrid_open", label: "WTA Madrid" },
+    { key: "mma_mixed_martial_arts", label: "MMA/UFC" },
   ];
-
   if (ODDS_API_KEY) {
     for (var i = 0; i < sports.length; i++) {
       try {
@@ -70,8 +57,7 @@ export async function handler(event) {
           for (var j = 0; j < scores.length; j++) {
             var game = scores[j];
             if (game.completed) {
-              var homeScore = 0;
-              var awayScore = 0;
+              var homeScore = 0; var awayScore = 0;
               if (game.scores) {
                 for (var s = 0; s < game.scores.length; s++) {
                   if (game.scores[s].name === game.home_team) homeScore = parseInt(game.scores[s].score) || 0;
@@ -79,7 +65,8 @@ export async function handler(event) {
                 }
               }
               var winner = homeScore > awayScore ? game.home_team : (awayScore > homeScore ? game.away_team : "DRAW");
-              completedGames.push({ sport: sports[i].label, home: game.home_team, away: game.away_team, homeScore: homeScore, awayScore: awayScore, winner: winner });
+              var totalRuns = homeScore + awayScore;
+              completedGames.push({ sport: sports[i].label, home: game.home_team, away: game.away_team, homeScore: homeScore, awayScore: awayScore, winner: winner, total: totalRuns });
             }
           }
         }
@@ -87,7 +74,7 @@ export async function handler(event) {
     }
   }
 
-  // Build game results text
+  // Build data for AI grading
   var gamesInfo = "";
   if (completedGames.length) {
     var bySport = {};
@@ -96,80 +83,98 @@ export async function handler(event) {
       if (!bySport[g.sport]) bySport[g.sport] = [];
       bySport[g.sport].push(g);
     }
-    gamesInfo = "COMPLETED GAMES (scores are CORRECT from the API -- do NOT change winners):\n\n";
+    gamesInfo = "COMPLETED GAMES (scores are CORRECT from the API — do NOT change winners):\n\n";
     var sportKeys = Object.keys(bySport);
     for (var i = 0; i < sportKeys.length; i++) {
       gamesInfo += sportKeys[i] + ":\n";
       for (var j = 0; j < bySport[sportKeys[i]].length; j++) {
         var g = bySport[sportKeys[i]][j];
-        gamesInfo += "  " + g.away + " " + g.awayScore + " @ " + g.home + " " + g.homeScore + " -- Winner: " + g.winner + "\n";
+        gamesInfo += "  " + g.away + " " + g.awayScore + " @ " + g.home + " " + g.homeScore + " — Winner: " + g.winner + " | Total: " + g.total + "\n";
       }
       gamesInfo += "\n";
     }
   }
 
-  // Build saved picks text
-  var picksInfo = "";
+  // Build EV picks info
+  var evPicksInfo = "";
   if (savedPicks && savedPicks.bets && savedPicks.bets.length) {
-    picksInfo = "OUR ACTUAL PICKS FROM THIS SCAN (these are the REAL picks we posted):\n\n";
+    evPicksInfo = "=== EV SCANNER PICKS (from " + picksDate + ") ===\n";
     for (var i = 0; i < savedPicks.bets.length; i++) {
       var b = savedPicks.bets[i];
       var fmtOdds = b.bookOdds > 0 ? "+" + b.bookOdds : "" + b.bookOdds;
-      picksInfo += (i + 1) + ". " + b.sport + " | " + b.pick + " | " + b.game + " | " + b.bookName + " " + fmtOdds + " | EV: " + (b.ev * 100).toFixed(2) + "% | Type: " + b.marketLabel + "\n";
+      evPicksInfo += (i + 1) + ". " + b.sport + " | " + b.pick + " | " + b.game + " | " + b.bookName + " " + fmtOdds + " | Type: " + b.marketLabel + "\n";
     }
-    picksInfo += "\n";
-  } else {
-    picksInfo = "NO SAVED PICKS FOUND for yesterday. This is the first run or picks were not saved.\n\n";
+    evPicksInfo += "\n";
   }
 
-  var historyInfo = "SCAN HISTORY:\n";
-  var histKeys = Object.keys(history).sort();
-  var totalDays = histKeys.length;
-  historyInfo += "Total days tracked: " + totalDays + "\n";
-  if (histKeys.length > 5) histKeys = histKeys.slice(-5);
-  for (var i = 0; i < histKeys.length; i++) {
-    historyInfo += "  " + histKeys[i] + ": " + history[histKeys[i]].bets + " bets across " + history[histKeys[i]].sports + " sports\n";
+  // Build AI picks info
+  var aiPicksInfo = "";
+  if (savedPicks && savedPicks.aiPicks && savedPicks.aiPicks.length) {
+    aiPicksInfo = "=== AI BEST BETS (from " + picksDate + ") ===\n";
+    for (var i = 0; i < savedPicks.aiPicks.length; i++) {
+      aiPicksInfo += (i + 1) + ". " + savedPicks.aiPicks[i].pick + "\n";
+    }
+    aiPicksInfo += "\n";
   }
-  historyInfo += "\n";
+
+  // Build Lock & Parlay info
+  var lockParlayInfo = "";
+  if (savedPicks && (savedPicks.lock || (savedPicks.parlayLegs && savedPicks.parlayLegs.length))) {
+    lockParlayInfo = "=== LOCK & PARLAY PICKS (from " + picksDate + ") ===\n";
+    if (savedPicks.lock) { lockParlayInfo += "LOCK OF THE DAY: " + savedPicks.lock + "\n"; }
+    if (savedPicks.parlayLegs && savedPicks.parlayLegs.length) {
+      lockParlayInfo += "PARLAY LEGS:\n";
+      for (var i = 0; i < savedPicks.parlayLegs.length; i++) {
+        lockParlayInfo += "  Leg " + (i + 1) + ": " + savedPicks.parlayLegs[i] + "\n";
+      }
+    }
+    lockParlayInfo += "\n";
+  }
 
   var prompt = "You are the official record keeper for The Juice Report sports betting Discord. Today is " + today + " (Eastern Time). Use this EXACT date.\n\n";
   prompt += gamesInfo;
-  prompt += picksInfo;
-  prompt += historyInfo;
-  prompt += "CRITICAL RULES:\n";
-  prompt += "1. Scores and winners above are from the official API. Do NOT change them. The team with MORE points/goals wins.\n";
-  prompt += "2. If we have saved picks, grade EACH ONE against the results. A moneyline pick WINS if the team we picked won. A spread pick needs the team to cover.\n";
-  prompt += "3. For totals (over/under), you may not have enough info to grade -- mark as PUSH or PENDING.\n";
-  prompt += "4. For player props, mark as PENDING since we don't have player stats.\n";
-  prompt += "5. If no saved picks exist, just show the scoreboard and key takeaways.\n\n";
-  prompt += "FORMAT YOUR REPORT:\n\n";
-  prompt += "SECTION 1: SCOREBOARD\nList games by sport: [Away] [score] @ [Home] [score] -- W: [winner]\n\n";
-  prompt += "SECTION 2: PICK GRADING (only if we have saved picks)\nGo through each pick and grade it: WIN / LOSS / PUSH / PENDING\nShow the pick, what happened, and the result.\nEnd with today's record: X-Y (W-L)\n\n";
-  prompt += "SECTION 3: RUNNING RECORD\nShow how many days we've tracked, today's record, and a note that the running record will build over time as we track more days.\n\n";
-  prompt += "SECTION 4: KEY TAKEAWAYS\n3-5 sharp one-line observations about the results (upsets, blowouts, trends).\n\n";
+  prompt += evPicksInfo;
+  prompt += aiPicksInfo;
+  prompt += lockParlayInfo;
+  prompt += "\nCRITICAL GRADING RULES:\n";
+  prompt += "1. Scores and winners above are from the official API. Do NOT change them. Higher score = winner.\n";
+  prompt += "2. Grade EACH pick in ALL THREE categories separately.\n";
+  prompt += "3. ML picks: WIN if the team we picked won the game. LOSS if they lost.\n";
+  prompt += "4. Spread picks: WIN if the team covered the spread. LOSS if they didn't.\n";
+  prompt += "5. Total (Over/Under) picks: WIN if the combined score went over/under the line. LOSS if not.\n";
+  prompt += "6. If you cannot determine the result (player props, games not played yet), mark as PENDING.\n";
+  prompt += "7. For parlay legs, grade EACH LEG individually as WIN or LOSS — do NOT grade the parlay as a whole.\n";
+  prompt += "8. If no saved picks exist for a category, skip that section.\n\n";
+  prompt += "FORMAT YOUR REPORT EXACTLY LIKE THIS:\n\n";
+  prompt += "Start with: DAILY RESULTS — [today's date]\n";
+  prompt += "Then a line of dashes: ---\n\n";
+  prompt += "SECTION 1: SCOREBOARD\nList completed games by sport: [Away] [score] @ [Home] [score] — W: [winner]\n\n";
+  prompt += "SECTION 2: +EV PLAYS GRADING\nGrade each EV scanner pick. Show: [pick] — [result emoji WIN/LOSS/PENDING]\nEnd with: Today: X-Y | (win rate %)\n\n";
+  prompt += "SECTION 3: AI BEST BETS GRADING\nGrade each AI pick. Show: [pick] — [result emoji WIN/LOSS/PENDING]\nEnd with: Today: X-Y | (win rate %)\n\n";
+  prompt += "SECTION 4: LOCK & PARLAY GRADING\nGrade the lock: [lock pick] — [WIN/LOSS]\nGrade EACH parlay leg individually: [leg] — [WIN/LOSS]\nEnd with: Lock: X-Y | Parlay Legs: X-Y\n\n";
+  prompt += "SECTION 5: OVERALL DASHBOARD\nShow all records in a clean summary:\n+EV Plays: X-Y (win %)\nAI Picks: X-Y (win %)\nLock: X-Y (win %)\nParlay Legs: X-Y (win %)\n\n";
+  prompt += "SECTION 6: KEY TAKEAWAYS\n3-5 sharp one-line observations about today's results.\n\n";
   prompt += "End with: The math doesn't lie. Trust the process.\n\n";
-  prompt += "Use ** for bold. Use --- for dividers. Keep it concise for Discord.";
+  prompt += "Use ** for bold. Use --- for dividers. Use ✅ for wins and ❌ for losses. Keep it concise for Discord.";
 
   try {
     var aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2500, messages: [{ role: "user", content: prompt }] })
     });
-
     if (!aiRes.ok) {
       var err = await aiRes.text();
       return { statusCode: 200, body: "AI error: " + aiRes.status + " " + err.substring(0, 200) };
     }
-
     var aiData = await aiRes.json();
     var aiText = "";
     for (var i = 0; i < aiData.content.length; i++) {
       if (aiData.content[i].type === "text") aiText += aiData.content[i].text;
     }
-
     if (!aiText) return { statusCode: 200, body: "AI returned empty" };
 
+    // Split into Discord-safe chunks
     var chunks = [];
     while (aiText.length > 0) {
       if (aiText.length <= 1900) { chunks.push(aiText); break; }
@@ -179,13 +184,15 @@ export async function handler(event) {
       aiText = aiText.substring(cut);
     }
 
+    // Post header
     await fetch(DISCORD_WEBHOOK, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "The Juice Report", content: "# Daily Results & Track Record" })
+      body: JSON.stringify({ username: "The Juice Report", content: "# 📋 Daily Results & Track Record" })
     });
     await new Promise(function(r) { setTimeout(r, 500); });
 
+    // Post each chunk as an embed
     for (var c = 0; c < chunks.length; c++) {
       await fetch(DISCORD_WEBHOOK, {
         method: "POST",
@@ -195,15 +202,18 @@ export async function handler(event) {
           embeds: [{
             description: chunks[c],
             color: 0xFF9800,
-            footer: c === chunks.length - 1 ? { text: "The Juice Report -- Track Record | " + today } : undefined
+            footer: c === chunks.length - 1 ? { text: "🍊 The Juice Report — Squeeze the Edge | " + today } : undefined
           }]
         })
       });
       if (c < chunks.length - 1) await new Promise(function(r) { setTimeout(r, 500); });
     }
 
-    var picksGraded = savedPicks && savedPicks.bets ? savedPicks.bets.length : 0;
-    return { statusCode: 200, body: "Results posted. " + completedGames.length + " games, " + picksGraded + " picks graded." };
+    var evCount = savedPicks && savedPicks.bets ? savedPicks.bets.length : 0;
+    var aiCount = savedPicks && savedPicks.aiPicks ? savedPicks.aiPicks.length : 0;
+    var lockCount = savedPicks && savedPicks.lock ? 1 : 0;
+    var parlayCount = savedPicks && savedPicks.parlayLegs ? savedPicks.parlayLegs.length : 0;
+    return { statusCode: 200, body: "Results posted. " + completedGames.length + " games. Graded — EV:" + evCount + " AI:" + aiCount + " Lock:" + lockCount + " Parlay legs:" + parlayCount };
   } catch (e) {
     return { statusCode: 200, body: "Error: " + e.message };
   }
